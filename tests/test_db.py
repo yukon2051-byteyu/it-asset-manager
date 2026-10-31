@@ -58,15 +58,17 @@ class TestDatabase(unittest.TestCase):
 
     # --- 正常系 ---
 
-    def test_6つのテーブルが作られる(self):
+    def test_8つのテーブルが作られる(self):
         rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         names = {row["name"] for row in rows}
-        self.assertEqual(names, {"employees", "devices", "licenses", "license_assignments", "requests", "audit_logs"})
+        self.assertEqual(names, {"employees", "devices", "licenses", "license_assignments", "requests", "audit_logs",
+                                 "inventories", "inventory_items"})
 
     def test_古い構造の操作履歴をデータを残したまま移行できる(self):
         # v0.3 の構造（対象の種類に employee がない）のデータベースを作る
         old_db = Path(self.tmpdir.name) / "old.db"
-        old_schema = db.SCHEMA.replace("'request', 'employee'", "'request'")
+        old_schema = db.SCHEMA.replace("'request', 'employee', 'inventory'", "'request'")
+        self.assertNotEqual(old_schema, db.SCHEMA)  # 置き換えが効いていること（SCHEMA を変えたら、ここも見直す）
         conn = db.get_connection(old_db)
         conn.executescript(old_schema)
         with conn:
@@ -90,6 +92,33 @@ class TestDatabase(unittest.TestCase):
             self.assertNotIn("audit_logs_old", tables)
         finally:
             conn.close()
+
+    def test_社員まである構造からも棚卸を足した構造へ移行できる(self):
+        # v0.4 の構造（employee はあるが inventory がない）
+        old_db = Path(self.tmpdir.name) / "v04.db"
+        old_schema = db.SCHEMA.replace("'employee', 'inventory'", "'employee'")
+        self.assertNotEqual(old_schema, db.SCHEMA)
+        conn = db.get_connection(old_db)
+        conn.executescript(old_schema)
+        with conn:
+            conn.execute("INSERT INTO audit_logs (target_type, target_id, target_label, action)"
+                         " VALUES ('employee', 1, 'E0001', 'update')")
+        conn.close()
+
+        db.init_db(old_db)
+
+        conn = db.get_connection(old_db)
+        try:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0], 1)
+            with conn:
+                conn.execute("INSERT INTO audit_logs (target_type, target_id, target_label, action)"
+                             " VALUES ('inventory', 1, '棚卸', 'start')")
+        finally:
+            conn.close()
+
+    def test_スキーマと移行の判定に使う種類の一覧が一致している(self):
+        for target_type in db.AUDIT_TARGET_TYPES:
+            self.assertIn(f"'{target_type}'", db.SCHEMA)
 
     def test_init_dbを2回実行してもデータが消えない(self):
         self.add_employee()

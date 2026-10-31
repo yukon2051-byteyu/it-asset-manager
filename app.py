@@ -11,6 +11,7 @@ import device_import
 import devices
 import employees
 import exports
+import inventory
 import licenses
 
 st.set_page_config(page_title="社内IT資産管理システム", page_icon="💻")
@@ -116,6 +117,174 @@ def show_employee_manage():
                 else:
                     done("employee_message", f'{emp["employee_code"]} {emp["name"]} を再有効化しました。'
                                              "パスワードは、必要に応じて再発行してください。")
+
+
+def item_table(rows, columns):
+    """棚卸の明細から、指定した列だけを表にする。"""
+    return pd.DataFrame(rows)[columns]
+
+
+def download_buttons(df, base_name, key):
+    """表をCSV・Excelで保存するボタン（ファイル名に日付を入れる）。"""
+    today = datetime.date.today()
+    col1, col2, _ = st.columns([1, 1, 2])
+    col1.download_button("CSVでダウンロード", exports.to_csv_bytes(df), file_name=f"{base_name}_{today}.csv",
+                         mime="text/csv", key=f"{key}_csv")
+    col2.download_button("Excelでダウンロード", exports.to_excel_bytes(df, base_name[:31]),
+                         file_name=f"{base_name}_{today}.xlsx", key=f"{key}_xlsx",
+                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+RESULT_COLUMNS = ["資産番号", "種別", "機器", "開始時の状態", "回答する人", "部署", "回答", "状況", "回答者", "回答日時", "対応メモ"]
+
+
+def show_my_inventory(user):
+    """棚卸の回答（UC-07 / F-42）：社員が自分の機器ごとに「ある／ない」を回答する。"""
+    flash("inventory_answer_message")
+    inv = inventory.get_open_inventory()
+    if inv is None:
+        st.info("実施中の棚卸はありません。")
+        return
+    st.markdown(f'**{inv["name"]}**　回答期限：{inv["due_date"]}')
+    if datetime.date.today().isoformat() > inv["due_date"]:
+        st.warning("回答期限を過ぎています。できるだけ早く回答してください。")
+
+    items = inventory.list_items(inv["id"], employee_id=user["id"])
+    if not items:
+        st.info("あなたが回答する機器はありません。")
+        return
+    st.caption(f'{sum(1 for i in items if i["answer"])} / {len(items)} 件 回答済み')
+
+    choices = list(inventory.ANSWER_LABELS)
+    with st.form("my_inventory"):
+        answers = []
+        for item in items:
+            st.markdown(f'**{item["資産番号"]}**　{item["種別"]} {item["機器"]}')
+            col1, col2 = st.columns([1, 2])
+            choice = col1.radio("手元にあるか", choices, format_func=inventory.ANSWER_LABELS.get, horizontal=True,
+                                index=choices.index(item["answer"]) if item["answer"] else None,
+                                key=f'inv_answer_{item["id"]}')
+            comment = col2.text_input("状況（「ない」のときは必須）", value=item["状況"], key=f'inv_comment_{item["id"]}')
+            if choice:
+                answers.append((item["id"], choice, comment))
+        submitted = st.form_submit_button("回答する")
+    if submitted:
+        try:
+            count = inventory.answer_items(answers, user["id"])
+        except devices.ValidationError as e:
+            show_errors(e.errors, "回答できませんでした。")
+        else:
+            done("inventory_answer_message", f"{count} 件の回答を保存しました。ご協力ありがとうございます。")
+
+
+def show_inventory_history():
+    """これまでの棚卸と、その結果のダウンロード。"""
+    rows = [r for r in inventory.list_inventories() if r["状態"] == "完了"]
+    st.subheader("これまでの棚卸")
+    if not rows:
+        st.info("完了した棚卸はまだありません。")
+        return
+    st.dataframe(pd.DataFrame(rows).drop(columns=["id"]), hide_index=True)
+    labels = {r["id"]: f'{r["名前"]}（完了 {r["完了日時"]}）' for r in rows}
+    inventory_id = st.selectbox("結果を見る棚卸", list(labels), format_func=labels.get, key="history_inventory")
+    result = item_table(inventory.list_items(inventory_id), RESULT_COLUMNS)
+    st.dataframe(result, hide_index=True)
+    download_buttons(result, "棚卸結果", key=f"history_{inventory_id}")
+
+
+def show_inventory_admin():
+    """棚卸（UC-17 / F-41〜F-43）：開始、進み具合の確認、在庫の確認と代理の回答、差異の対応、完了。"""
+    flash("inventory_message")
+    inv = inventory.get_open_inventory()
+    today = datetime.date.today()
+
+    if inv is None:
+        st.subheader("棚卸を開始する")
+        st.caption("開始した時点の、使用中・貸出中・在庫の機器が対象になります（修理中・紛失・廃棄済は対象外）。")
+        with st.form("inventory_start"):
+            name = st.text_input("棚卸の名前", value=f"{today.year}年{today.month}月の棚卸", key="inv_name")
+            due = st.date_input("回答期限", value=today + datetime.timedelta(days=14), key="inv_due")
+            submitted = st.form_submit_button("開始する")
+        if submitted:
+            try:
+                _, count = inventory.start_inventory(name, due, actor_id=actor())
+            except devices.ValidationError as e:
+                show_errors(e.errors, "開始できませんでした。")
+            else:
+                done("inventory_message", f"「{name.strip()}」を開始しました（対象 {count} 件）。社員に回答を依頼してください。")
+        show_inventory_history()
+        return
+
+    st.markdown(f'**{inv["name"]}**（実施中）　回答期限：{inv["due_date"]}')
+    p = inventory.progress(inv["id"])
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("対象", p["total"])
+    col2.metric("回答済み", p["answered"])
+    col3.metric("未回答", p["unanswered"])
+    col4.metric("ない（対応待ち）", f'{p["absent"]}（{p["unresolved"]}）')
+
+    tab_unanswered, tab_absent, tab_all, tab_complete = st.tabs(["未回答", "差異（ない）", "全件", "完了"])
+
+    with tab_unanswered:
+        rows = inventory.list_items(inv["id"], view="unanswered")
+        if not rows:
+            st.success("すべての機器に回答があります。")
+        else:
+            df = item_table(rows, ["資産番号", "種別", "機器", "回答する人", "部署", "メールアドレス"])
+            st.dataframe(df, hide_index=True)
+            st.caption("回答を催促するときは、この一覧をダウンロードして使ってください。")
+            download_buttons(df, "棚卸_未回答", key="unanswered")
+
+            st.markdown("**在庫の確認・代理の回答**")
+            labels = {r["id"]: f'{r["資産番号"]}　{r["機器"]}（{r["回答する人"]}）' for r in rows}
+            item_id = st.selectbox("機器", list(labels), format_func=labels.get, key="proxy_item")
+            choices = list(inventory.ANSWER_LABELS)
+            choice = st.radio("確認の結果", choices, format_func=inventory.ANSWER_LABELS.get, horizontal=True,
+                              key=f"proxy_answer_{item_id}")
+            comment = st.text_input("状況（「ない」のときは必須。代理のときは確認の方法も）",
+                                    placeholder="例：本人に電話で確認した", key=f"proxy_comment_{item_id}")
+            if st.button("この内容で回答する", key=f"proxy_button_{item_id}"):
+                try:
+                    inventory.answer_items([(item_id, choice, comment)], actor(), as_admin=True)
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "回答できませんでした。")
+                else:
+                    done("inventory_message", f"{labels[item_id].split('　')[0]} を「{inventory.ANSWER_LABELS[choice]}」で回答しました。")
+
+    with tab_absent:
+        rows = inventory.list_items(inv["id"], view="absent")
+        if not rows:
+            st.info("「ない」と回答された機器はありません。")
+        else:
+            st.dataframe(item_table(rows, ["資産番号", "種別", "機器", "回答する人", "状況", "対応メモ"]), hide_index=True)
+            st.caption("台帳の修正（紛失・返却などの処理）は「割当・返却・廃棄」や「申請の承認」で行い、ここには対応の内容を記録します。")
+            labels = {r["id"]: f'{r["資産番号"]}　{r["回答する人"]}' for r in rows}
+            item_id = st.selectbox("対応メモを書く機器", list(labels), format_func=labels.get, key="resolve_item")
+            current = next(r["対応メモ"] for r in rows if r["id"] == item_id)
+            resolution = st.text_input("対応メモ", value=current, placeholder="例：紛失として処理した／後日返却された",
+                                       key=f"resolution_{item_id}")
+            if st.button("対応メモを保存する", key=f"resolve_button_{item_id}"):
+                try:
+                    inventory.resolve_item(item_id, resolution, actor_id=actor())
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "保存できませんでした。")
+                else:
+                    done("inventory_message", f"{labels[item_id].split('　')[0]} の対応メモを保存しました。")
+
+    with tab_all:
+        df = item_table(inventory.list_items(inv["id"]), RESULT_COLUMNS)
+        st.dataframe(df, hide_index=True)
+        download_buttons(df, "棚卸結果", key="all")
+
+    with tab_complete:
+        st.write("完了できる条件：すべての機器に回答があり、「ない」と回答された機器すべてに対応メモがあること。")
+        if st.button("棚卸を完了する", type="primary", key="complete_inventory"):
+            try:
+                inventory.complete_inventory(inv["id"], actor_id=actor())
+            except devices.ValidationError as e:
+                show_errors(e.errors, "完了できませんでした。")
+            else:
+                done("inventory_message", f"「{inv['name']}」を完了しました。結果は「これまでの棚卸」からダウンロードできます。")
 
 
 def show_audit_logs():
@@ -674,9 +843,9 @@ if st.sidebar.button("ログアウト"):
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
     menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "CSV一括登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス",
-                                       "利用者管理", "操作履歴"])
+                                       "棚卸", "利用者管理", "操作履歴"])
 else:
-    menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
+    menu = st.sidebar.radio("メニュー", ["自分の資産", "申請", "棚卸の回答"])
 
 st.header(menu)
 if menu == "資産一覧":
@@ -695,11 +864,15 @@ elif menu == "申請の承認":
     show_request_review(user)
 elif menu == "利用者管理":
     show_employee_manage()
+elif menu == "棚卸":
+    show_inventory_admin()
 elif menu == "操作履歴":
     show_audit_logs()
 elif menu == "自分の資産":
     show_my_assets(user["id"])
 elif menu == "申請":
     show_my_requests(user)
+elif menu == "棚卸の回答":
+    show_my_inventory(user)
 else:
     st.info("この画面はまだ準備中です。")

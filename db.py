@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     id           INTEGER PRIMARY KEY,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     actor_id     INTEGER REFERENCES employees(id),
-    target_type  TEXT    NOT NULL CHECK (target_type IN ('device', 'license', 'request', 'employee')),
+    target_type  TEXT    NOT NULL CHECK (target_type IN ('device', 'license', 'request', 'employee', 'inventory')),
     target_id    INTEGER NOT NULL,
     target_label TEXT    NOT NULL,
     action       TEXT    NOT NULL,
@@ -110,7 +110,38 @@ CREATE TRIGGER IF NOT EXISTS audit_logs_no_delete BEFORE DELETE ON audit_logs
 BEGIN
     SELECT RAISE(ABORT, '操作履歴は削除できません');
 END;
+
+CREATE TABLE IF NOT EXISTS inventories (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT    NOT NULL,
+    due_date     TEXT    NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed')),
+    started_by   INTEGER REFERENCES employees(id),
+    started_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    completed_at TEXT
+);
+
+-- 実施中（open）の棚卸は1つだけ。2つ目を作ろうとするとエラーになる
+CREATE UNIQUE INDEX IF NOT EXISTS inventories_one_open ON inventories(status) WHERE status = 'open';
+
+CREATE TABLE IF NOT EXISTS inventory_items (
+    id              INTEGER PRIMARY KEY,
+    inventory_id    INTEGER NOT NULL REFERENCES inventories(id),
+    device_id       INTEGER NOT NULL REFERENCES devices(id),
+    -- 回答する社員（開始した時点の利用者）。空欄は、IT管理者が確認する在庫の機器
+    employee_id     INTEGER REFERENCES employees(id),
+    status_at_start TEXT    NOT NULL,
+    answer          TEXT    CHECK (answer IN ('present', 'absent')),
+    comment         TEXT,
+    answered_by     INTEGER REFERENCES employees(id),
+    answered_at     TEXT,
+    resolution      TEXT,
+    UNIQUE (inventory_id, device_id)
+);
 """
+
+# 操作履歴の「対象の種類」。SCHEMA の audit_logs の CHECK と同じものを並べる（移行の判定に使う）
+AUDIT_TARGET_TYPES = ("device", "license", "request", "employee", "inventory")
 
 
 def get_connection(db_path=DB_PATH):
@@ -135,11 +166,12 @@ def like_pattern(keyword):
 def _migrate(conn):
     """古い構造のデータベースを、データを残したまま新しい構造に移す（マイグレーション）。
 
-    v0.3 の audit_logs は対象の種類に「社員（employee）」を含まないルールで作られている。
-    SQLite は既存テーブルのルール（CHECK）を変更できないため、作り直してデータを移す。
+    audit_logs は、機能を足すたびに「対象の種類」のルール（CHECK）が増えてきた
+    （v0.3 → 社員を追加 → 棚卸を追加）。SQLite は既存テーブルの CHECK を変更できないため、
+    必要な種類がそろっていなければ、作り直してデータを移す。
     """
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").fetchone()
-    if row is None or "'employee'" in row["sql"]:
+    if row is None or all(f"'{t}'" in row["sql"] for t in AUDIT_TARGET_TYPES):
         return  # まだテーブルがない、またはすでに新しい構造
     conn.executescript(
         """
