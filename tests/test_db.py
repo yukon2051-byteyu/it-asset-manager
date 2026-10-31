@@ -58,10 +58,10 @@ class TestDatabase(unittest.TestCase):
 
     # --- 正常系 ---
 
-    def test_4つのテーブルが作られる(self):
+    def test_5つのテーブルが作られる(self):
         rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         names = {row["name"] for row in rows}
-        self.assertEqual(names, {"employees", "devices", "licenses", "license_assignments"})
+        self.assertEqual(names, {"employees", "devices", "licenses", "license_assignments", "requests"})
 
     def test_init_dbを2回実行してもデータが消えない(self):
         self.add_employee()

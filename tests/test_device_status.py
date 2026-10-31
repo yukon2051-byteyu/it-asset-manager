@@ -52,12 +52,26 @@ class TestChangeStatus(unittest.TestCase):
 
     # --- できる操作の一覧 ---
 
-    def test_状態ごとにできる操作が決まっている(self):
+    def test_状態ごとに管理者が直接できる操作が決まっている(self):
+        # 貸出・故障・紛失は申請の承認を通して行うので、ここには出ない
         self.assertEqual(devices.available_actions("in_stock"), ["assign", "dispose"])
         self.assertEqual(devices.available_actions("in_use"), ["return"])
         self.assertEqual(devices.available_actions("lent"), ["return"])
-        self.assertEqual(devices.available_actions("repair"), ["dispose"])
+        self.assertEqual(devices.available_actions("repair"), ["repaired", "dispose"])
+        self.assertEqual(devices.available_actions("lost"), [])
         self.assertEqual(devices.available_actions("disposed"), [])
+
+    def test_修理完了で在庫に戻る(self):
+        self.assertEqual(self.change("PC-0006", "repaired"), "in_stock")
+
+    def test_紛失するとそのPCのライセンスも解除される(self):
+        self.assertEqual(self.change("PC-0001", "loss"), "lost")
+        rows = self.run_sql(
+            "SELECT a.released_on FROM license_assignments a JOIN devices d ON d.id = a.device_id"
+            " WHERE d.asset_no = 'PC-0001'"
+        )
+        self.assertIsNotNone(rows[0]["released_on"])
+        self.assertIsNone(self.get("PC-0001")["employee_id"])
 
     # --- 割当 ---
 

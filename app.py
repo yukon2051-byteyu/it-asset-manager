@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 
+import applications
 import auth
 import db
 import device_import
@@ -331,6 +332,119 @@ def show_licenses():
                     done("license_message", f'ライセンス「{data["name"].strip()}」を変更しました。')
 
 
+# 申請の一覧のうち、画面には出さない内部用の列
+REQUEST_INTERNAL_COLUMNS = ["id", "request_type", "category"]
+
+
+def request_table(rows, drop=()):
+    return pd.DataFrame(rows).drop(columns=[*REQUEST_INTERNAL_COLUMNS, *drop])
+
+
+def show_my_requests(user):
+    """申請（UC-03〜UC-06）：一般社員が貸出・返却・故障・紛失を申請し、状況を確認する。"""
+    flash("request_message")
+    tab_new, tab_list = st.tabs(["新しい申請", "申請の状況"])
+
+    with tab_new:
+        # 種類は form の外に置く（種類ごとに入力欄を切り替えるため）
+        request_type = st.radio("申請の種類", list(applications.TYPE_LABELS),
+                                format_func=applications.TYPE_LABELS.get, horizontal=True, key="request_type")
+        my_devices = applications.list_my_devices(user["id"])
+        if request_type != "lend" and not my_devices:
+            st.info("あなたが使っている機器はありません。")
+        else:
+            key = f"req_{request_type}_"
+            with st.form(f"request_{request_type}"):
+                data = {"request_type": request_type}
+                if request_type == "lend":
+                    data["category"] = st.selectbox("借りたい機器", list(devices.CATEGORY_LABELS),
+                                                    format_func=devices.CATEGORY_LABELS.get, key=key + "category")
+                    data["detail"] = st.text_area("利用目的（必須）", placeholder="例：出張先でのプレゼンに使うため",
+                                                  key=key + "detail")
+                    col1, col2 = st.columns(2)
+                    data["start_date"] = col1.date_input("利用開始日（必須）", value=None, key=key + "start")
+                    data["due_date"] = col2.date_input("返却予定日（必須）", value=None, key=key + "due")
+                else:
+                    data["device_id"] = st.selectbox("対象の機器", list(my_devices), format_func=my_devices.get,
+                                                     key=key + "device")
+                    if request_type in ("failure", "loss"):
+                        data["occurred_on"] = st.date_input("発生日（必須）", value=None, key=key + "occurred")
+                        data["detail"] = st.text_area("内容（必須）", placeholder="例：電源が入らない／電車に置き忘れた",
+                                                      key=key + "detail")
+                    else:
+                        data["detail"] = st.text_area("備考", key=key + "detail")
+                submitted = st.form_submit_button("申請する")
+            if submitted:
+                try:
+                    request_id = applications.create_request(user["id"], data)
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "申請できませんでした。")
+                else:
+                    done("request_message",
+                         f"{applications.request_no(request_id)} で申請しました。IT管理者の承認をお待ちください。")
+
+    with tab_list:
+        rows = applications.list_requests(requester_id=user["id"])
+        if rows:
+            st.dataframe(request_table(rows, drop=["申請者"]), hide_index=True)
+        else:
+            st.info("まだ申請はありません。")
+
+
+def show_request_review(user):
+    """申請の承認（UC-13）：IT管理者が申請を承認・保留・却下する。承認すると機器の状態も変わる。"""
+    flash("review_message")
+    tab_open, tab_all = st.tabs(["処理待ち", "すべての申請"])
+
+    with tab_open:
+        rows = applications.list_requests(statuses=list(applications.OPEN_STATUSES))
+        if not rows:
+            st.info("処理待ちの申請はありません。")
+        else:
+            st.dataframe(request_table(rows), hide_index=True)
+            labels = {r["id"]: f'{r["申請番号"]}　{r["種類"]}　{r["申請者"]}（{r["状態"]}）' for r in rows}
+            request_id = st.selectbox("処理する申請", list(labels), format_func=labels.get, key="review_target")
+            r = next(row for row in rows if row["id"] == request_id)
+            st.caption(f'対象：{r["対象"]}　{r["期間・発生日"]}　内容：{r["内容"] or "なし"}')
+
+            device_id = None
+            can_approve = True
+            if r["request_type"] == "lend":
+                stock = applications.list_stock_devices(r["category"])
+                if stock:
+                    device_id = st.selectbox("貸し出す機器（在庫）", list(stock), format_func=stock.get,
+                                             key=f"lend_device_{request_id}")
+                else:
+                    st.warning("この種別の在庫がありません。保留にするか、却下してください。")
+                    can_approve = False
+            reason = st.text_input("却下・保留の理由（却下・保留のときは必須。申請者に表示されます）",
+                                   key=f"reason_{request_id}")
+
+            col1, col2, col3 = st.columns(3)
+            action = None
+            if col1.button("承認する", type="primary", disabled=not can_approve, key=f"approve_{request_id}"):
+                action = ("承認しました", lambda: applications.approve(request_id, user["id"], device_id))
+            if r["request_type"] == "lend" and col2.button("保留にする", key=f"hold_{request_id}"):
+                action = ("保留にしました", lambda: applications.hold(request_id, user["id"], reason))
+            if col3.button("却下する", key=f"reject_{request_id}"):
+                action = ("却下しました", lambda: applications.reject(request_id, user["id"], reason))
+            if action:
+                message, run = action
+                try:
+                    run()
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "処理できませんでした。")
+                else:
+                    done("review_message", f'{r["申請番号"]}（{r["種類"]}）を{message}。')
+
+    with tab_all:
+        rows = applications.list_requests()
+        if rows:
+            st.dataframe(request_table(rows), hide_index=True)
+        else:
+            st.info("まだ申請はありません。")
+
+
 def show_my_assets(employee_id):
     """自分の資産（UC-02）：自分が利用している機器とライセンスを表示する。"""
     st.subheader("機器")
@@ -403,7 +517,11 @@ elif menu == "割当・返却・廃棄":
     show_device_status()
 elif menu == "ライセンス":
     show_licenses()
+elif menu == "申請の承認":
+    show_request_review(user)
 elif menu == "自分の資産":
     show_my_assets(user["id"])
+elif menu == "申請":
+    show_my_requests(user)
 else:
     st.info("この画面はまだ準備中です。")

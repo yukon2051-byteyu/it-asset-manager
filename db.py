@@ -68,6 +68,25 @@ CREATE TABLE IF NOT EXISTS license_assignments (
     -- 割当先は社員かPCのどちらか一方だけ（両方空欄・両方に値はエラー）
     CHECK ((employee_id IS NULL) <> (device_id IS NULL))
 );
+
+CREATE TABLE IF NOT EXISTS requests (
+    id            INTEGER PRIMARY KEY,
+    request_type  TEXT    NOT NULL CHECK (request_type IN ('lend', 'return', 'failure', 'loss')),
+    requester_id  INTEGER NOT NULL REFERENCES employees(id),
+    -- 貸出は承認時に管理者が機器を選ぶので、それまで空欄。返却・故障・紛失は申請時に必須
+    device_id     INTEGER REFERENCES devices(id),
+    category      TEXT    CHECK (category IN ('pc', 'monitor', 'smartphone')),
+    detail        TEXT,
+    start_date    TEXT,
+    due_date      TEXT,
+    occurred_on   TEXT,
+    status        TEXT    NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'approved', 'rejected', 'on_hold')),
+    reviewer_id   INTEGER REFERENCES employees(id),
+    comment       TEXT,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    processed_at  TEXT
+);
 """
 
 
