@@ -13,3 +13,15 @@ def list_employees(db_path=db.DB_PATH):
     finally:
         conn.close()
     return [dict(r) for r in rows]
+
+
+def list_departments(db_path=db.DB_PATH):
+    """在籍中の社員がいる部署の一覧を返す（資産一覧の絞り込みに使う）。"""
+    conn = db.get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT department FROM employees WHERE is_active = 1 ORDER BY department"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r["department"] for r in rows]

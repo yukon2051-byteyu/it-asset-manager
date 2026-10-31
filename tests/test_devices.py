@@ -65,6 +65,40 @@ class TestListDevices(unittest.TestCase):
         rows = devices.list_devices(employee_id=1, db_path=self.db_path)
         self.assertEqual(rows, [])
 
+    # --- キーワード・部署での検索 ---
+
+    def search(self, **conditions):
+        return self.asset_nos(devices.list_devices(db_path=self.db_path, **conditions))
+
+    def test_資産番号の一部で探せる(self):
+        self.assertEqual(self.search(keyword="PC-000"), ["PC-0001", "PC-0002", "PC-0003", "PC-0004", "PC-0005", "PC-0006"])
+
+    def test_小文字や全角で入力しても探せる(self):
+        self.assertEqual(self.search(keyword="pc-0001"), ["PC-0001"])
+        self.assertEqual(self.search(keyword="ＰＣ－０００１"), ["PC-0001"])
+        self.assertEqual(self.search(keyword="  PC-0001  "), ["PC-0001"])
+
+    def test_シリアル番号の一部で探せる(self):
+        self.assertEqual(self.search(keyword="SN-MN"), ["MN-0001", "MN-0002"])
+
+    def test_利用者名の一部で探せる(self):
+        self.assertEqual(self.search(keyword="鈴木"), ["MN-0001", "PC-0001", "SP-0001"])
+
+    def test_部署で絞り込める(self):
+        # 営業部は E0002 鈴木・E0004 田中
+        self.assertEqual(self.search(department="営業部"), ["MN-0001", "PC-0001", "PC-0003", "SP-0001"])
+
+    def test_キーワードと部署と種別を組み合わせられる(self):
+        self.assertEqual(self.search(keyword="PC", department="営業部", categories=["pc"]), ["PC-0001", "PC-0003"])
+
+    def test_記号はただの文字として探す(self):
+        # % と _ をそのままSQLに渡すと「何でもよい文字」の意味になり、全件や PC-0001 が見つかってしまう
+        self.assertEqual(self.search(keyword="%"), [])
+        self.assertEqual(self.search(keyword="PC_0001"), [])
+
+    def test_空白だけのキーワードは絞り込まない(self):
+        self.assertEqual(len(self.search(keyword="   ")), 10)
+
     def test_利用者がいない機器は空文字で表示される(self):
         row = devices.list_devices(statuses=["repair"], db_path=self.db_path)[0]
         self.assertEqual(row["利用者"], "")

@@ -35,6 +35,15 @@ class TestListEmployees(unittest.TestCase):
         self.assertNotIn("E0003", codes)
         self.assertEqual(len(codes), 4)
 
+    def test_部署の一覧は重複せず在籍者のいる部署だけ(self):
+        seed.seed(self.db_path)
+        self.assertEqual(employees.list_departments(self.db_path), ["営業部", "情報システム部", "経理部", "総務部"])
+        conn = db.get_connection(self.db_path)
+        with conn:
+            conn.execute("UPDATE employees SET is_active = 0 WHERE employee_code = 'E0003'")  # 経理部は高橋さんだけ
+        conn.close()
+        self.assertNotIn("経理部", employees.list_departments(self.db_path))
+
     def test_社員がいなければ空のリスト(self):
         db.init_db(self.db_path)
         self.assertEqual(employees.list_employees(self.db_path), [])

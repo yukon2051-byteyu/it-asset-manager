@@ -1,6 +1,7 @@
 """機器（PC・モニター・スマートフォン）のデータを扱うモジュール。"""
 import datetime
 import re
+import unicodedata
 
 import db
 
@@ -46,13 +47,24 @@ class ValidationError(Exception):
         self.errors = errors
 
 
-def list_devices(categories=None, statuses=None, employee_id=None, db_path=db.DB_PATH):
+def _like_pattern(keyword):
+    """部分一致検索用の文字列を作る。% と _ はSQLでは特別な意味を持つので、ただの文字として扱うよう印（\\）を付ける。"""
+    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def list_devices(categories=None, statuses=None, employee_id=None, keyword=None, department=None,
+                 db_path=db.DB_PATH):
     """機器の一覧を、画面表示用の日本語の列名で返す。
 
     categories / statuses にコードのリストを渡すと、その値だけに絞り込む。
     空のリストや None のときは絞り込まない。
     employee_id を渡すと、その社員が利用している機器だけに絞り込む。
+    keyword は資産番号・シリアル番号・利用者名の部分一致、department は利用者の部署で絞り込む。
     """
+    if keyword:
+        # 全角の英数字・記号を半角にそろえる（「ＰＣ－０００１」でも見つかるように）
+        keyword = unicodedata.normalize("NFKC", keyword).strip()
     sql = (
         "SELECT d.asset_no, d.category, d.maker, d.model, d.status,"
         " e.name AS user_name, e.department, d.location"
@@ -70,6 +82,15 @@ def list_devices(categories=None, statuses=None, employee_id=None, db_path=db.DB
     if employee_id is not None:
         conditions.append("d.employee_id = ?")
         params.append(employee_id)
+    if keyword:
+        # LIKE は英字の大文字・小文字を区別しないので、「pc-0001」でも見つかる
+        conditions.append(
+            "(d.asset_no LIKE ? ESCAPE '\\' OR d.serial_no LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"
+        )
+        params.extend([_like_pattern(keyword)] * 3)
+    if department:
+        conditions.append("e.department = ?")
+        params.append(department)
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY d.asset_no"

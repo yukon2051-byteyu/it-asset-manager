@@ -27,8 +27,11 @@ def show_device_list():
         "状態", list(devices.STATUS_LABELS), format_func=devices.STATUS_LABELS.get,
         placeholder="すべて",
     )
+    col3, col4 = st.columns(2)
+    keyword = col3.text_input("キーワード", placeholder="資産番号・シリアル番号・利用者名の一部")
+    department = col4.selectbox("利用者の部署", employees.list_departments(), index=None, placeholder="すべて")
 
-    rows = devices.list_devices(categories, statuses)
+    rows = devices.list_devices(categories, statuses, keyword=keyword, department=department)
     st.caption(f"{len(rows)} 件")
     if rows:
         st.dataframe(pd.DataFrame(rows), hide_index=True)
