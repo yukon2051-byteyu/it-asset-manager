@@ -33,29 +33,48 @@ def show_device_list():
         st.info("条件に合う機器はありません。")
 
 
+def device_form_fields(category, device=None, key=""):
+    """機器の入力欄を並べ、入力内容を辞書で返す（登録と更新で共通）。
+
+    device を渡すと、その値を初期値にする。key は入力欄を機器ごとに区別するための目印。
+    """
+    device = device or {}
+
+    def text(label, field, placeholder=None):
+        return st.text_input(label, value=device.get(field) or "", placeholder=placeholder, key=key + field)
+
+    def date(label, field):
+        return st.date_input(label, value=device.get(field), key=key + field)
+
+    data = {"category": category}
+    data["maker"] = text("メーカー（必須）", "maker")
+    data["model"] = text("型番（必須）", "model")
+    data["serial_no"] = text("シリアル番号（必須）", "serial_no")
+    if category == "pc":
+        data["os"] = text("OS", "os", placeholder="例：Windows 11")
+    elif category == "monitor":
+        data["screen_size"] = st.number_input(
+            "画面サイズ（インチ）", value=device.get("screen_size"), min_value=0.0, step=0.1, key=key + "screen_size"
+        )
+    elif category == "smartphone":
+        data["imei"] = text("IMEI（15桁の数字）", "imei")
+        data["phone_number"] = text("電話番号", "phone_number")
+        data["carrier"] = text("通信キャリア", "carrier")
+        data["contract_end"] = date("契約期限", "contract_end")
+    data["location"] = text("設置場所", "location", placeholder="例：情報システム部 倉庫")
+    data["purchase_date"] = date("購入日", "purchase_date")
+    data["warranty_end"] = date("保証期限", "warranty_end")
+    data["note"] = st.text_area("備考", value=device.get("note") or "", key=key + "note")
+    return data
+
+
 def show_device_register():
     """資産登録（F-11）：新しい機器を「在庫」の状態で登録する。"""
     # 種別は form の外に置く。form の中だと、ボタンを押すまで種別ごとの項目が切り替わらないため
     category = st.selectbox("種別", list(devices.CATEGORY_LABELS), format_func=devices.CATEGORY_LABELS.get)
 
     with st.form("device_register"):
-        data = {"category": category}
-        data["maker"] = st.text_input("メーカー（必須）")
-        data["model"] = st.text_input("型番（必須）")
-        data["serial_no"] = st.text_input("シリアル番号（必須）")
-        if category == "pc":
-            data["os"] = st.text_input("OS", placeholder="例：Windows 11")
-        elif category == "monitor":
-            data["screen_size"] = st.number_input("画面サイズ（インチ）", value=None, min_value=0.0, step=0.1)
-        elif category == "smartphone":
-            data["imei"] = st.text_input("IMEI（15桁の数字）")
-            data["phone_number"] = st.text_input("電話番号")
-            data["carrier"] = st.text_input("通信キャリア")
-            data["contract_end"] = st.date_input("契約期限", value=None)
-        data["location"] = st.text_input("設置場所", placeholder="例：情報システム部 倉庫")
-        data["purchase_date"] = st.date_input("購入日", value=None)
-        data["warranty_end"] = st.date_input("保証期限", value=None)
-        data["note"] = st.text_area("備考")
+        data = device_form_fields(category, key="new_")
         submitted = st.form_submit_button("登録する")
 
     if submitted:
@@ -66,6 +85,41 @@ def show_device_register():
                 st.error(message)
         else:
             st.success(f"登録しました。資産番号は {asset_no} です。機器にラベルを貼ってください。")
+
+
+def show_device_edit():
+    """資産更新（F-12）：登録済みの機器の情報を変更する。状態と利用者はここでは変えない。"""
+    rows = devices.list_devices()
+    if not rows:
+        st.info("登録されている機器はありません。")
+        return
+    labels = {r["資産番号"]: f'{r["資産番号"]}　{r["メーカー"]} {r["型番"]}（{r["状態"]}）' for r in rows}
+    # key を付けておくと、更新で選択肢の表示（メーカー名など）が変わっても選択が先頭に戻らない
+    asset_no = st.selectbox("変更する機器", list(labels), format_func=labels.get, key="edit_target")
+
+    device = devices.get_device(asset_no)
+    st.caption(
+        f'種別：{devices.CATEGORY_LABELS[device["category"]]}　'
+        f'状態：{devices.STATUS_LABELS[device["status"]]}　'
+        f'利用者：{device["user_name"] or "なし"}'
+    )
+    if device["status"] == "disposed":
+        st.warning("廃棄済の機器は変更できません。")
+        return
+
+    # 機器ごとに別の form・入力欄にする。同じ入力欄を使い回すと、前の機器の入力内容が残ってしまうため
+    with st.form(f"edit_{asset_no}"):
+        data = device_form_fields(device["category"], device, key=f"edit_{asset_no}_")
+        submitted = st.form_submit_button("更新する")
+
+    if submitted:
+        try:
+            devices.update_device(asset_no, data)
+        except devices.ValidationError as e:
+            for message in e.errors:
+                st.error(message)
+        else:
+            st.success(f"{asset_no} を更新しました。")
 
 
 def show_my_assets(employee_id):
@@ -123,7 +177,7 @@ if st.sidebar.button("ログアウト"):
 
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
-    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "申請の承認", "ライセンス"])
+    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "資産更新", "申請の承認", "ライセンス"])
 else:
     menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
 
@@ -132,6 +186,8 @@ if menu == "資産一覧":
     show_device_list()
 elif menu == "資産登録":
     show_device_register()
+elif menu == "資産更新":
+    show_device_edit()
 elif menu == "自分の資産":
     show_my_assets(user["id"])
 else:

@@ -35,6 +35,7 @@ CATEGORY_FIELDS = {
     "smartphone": ["imei", "phone_number", "carrier", "contract_end"],
 }
 REQUIRED_FIELDS = {"maker": "メーカー", "model": "型番", "serial_no": "シリアル番号"}
+DATE_FIELDS = ["purchase_date", "warranty_end", "contract_end"]
 
 
 class ValidationError(Exception):
@@ -106,8 +107,11 @@ def clean_device_input(data):
     return values
 
 
-def validate_device(values, conn):
-    """入力チェック（F-17）。誤りがあれば、画面に出すメッセージの一覧を返す。"""
+def validate_device(values, conn, exclude_id=None):
+    """入力チェック（F-17）。誤りがあれば、画面に出すメッセージの一覧を返す。
+
+    更新のときは exclude_id に自分の id を渡し、重複チェックから自分自身を除く。
+    """
     errors = []
     if values["category"] not in CATEGORY_LABELS:
         errors.append("種別を選んでください。")
@@ -116,7 +120,7 @@ def validate_device(values, conn):
             errors.append(f"{label}を入力してください。")
 
     serial_no = values.get("serial_no")
-    if serial_no and _exists(conn, "serial_no", serial_no):
+    if serial_no and _exists(conn, "serial_no", serial_no, exclude_id):
         errors.append(f"シリアル番号「{serial_no}」はすでに登録されています。")
 
     imei = values.get("imei")
@@ -124,7 +128,7 @@ def validate_device(values, conn):
         # isdigit() は全角数字も通してしまうため、半角数字だけを許す正規表現で確かめる
         if not re.fullmatch(r"[0-9]{15}", imei):
             errors.append("IMEIは15桁の半角数字で入力してください。")
-        elif _exists(conn, "imei", imei):
+        elif _exists(conn, "imei", imei, exclude_id):
             errors.append(f"IMEI「{imei}」はすでに登録されています。")
 
     purchase, warranty = values.get("purchase_date"), values.get("warranty_end")
@@ -137,9 +141,17 @@ def validate_device(values, conn):
     return errors
 
 
-def _exists(conn, column, value):
-    """devices の指定した列に、同じ値がすでにあるか。column にはプログラム内の固定の列名だけを渡す。"""
-    return conn.execute(f"SELECT 1 FROM devices WHERE {column} = ?", (value,)).fetchone() is not None
+def _exists(conn, column, value, exclude_id=None):
+    """devices の指定した列に、同じ値がすでにあるか（exclude_id の機器は除く）。
+
+    column にはプログラム内の固定の列名だけを渡す。
+    """
+    sql = f"SELECT 1 FROM devices WHERE {column} = ?"
+    params = [value]
+    if exclude_id is not None:
+        sql += " AND id <> ?"
+        params.append(exclude_id)
+    return conn.execute(sql, params).fetchone() is not None
 
 
 def next_asset_no(conn, category):
@@ -159,11 +171,7 @@ def register_device(data, db_path=db.DB_PATH):
         if errors:
             raise ValidationError(errors)
 
-        # 日付は「YYYY-MM-DD」の文字列で保存する（設計書 1章）
-        for key, value in values.items():
-            if isinstance(value, datetime.date):
-                values[key] = value.isoformat()
-
+        _dates_to_text(values)
         with conn:
             asset_no = next_asset_no(conn, values["category"])
             columns = ["asset_no", *values]
@@ -172,5 +180,64 @@ def register_device(data, db_path=db.DB_PATH):
                 [asset_no, *values.values()],
             )
         return asset_no
+    finally:
+        conn.close()
+
+
+def _dates_to_text(values):
+    """日付は「YYYY-MM-DD」の文字列で保存する（設計書 1章）。"""
+    for key, value in values.items():
+        if isinstance(value, datetime.date):
+            values[key] = value.isoformat()
+
+
+def get_device(asset_no, db_path=db.DB_PATH):
+    """機器1台の情報を返す（見つからなければ None）。日付は画面で扱いやすいよう date 型にする。"""
+    conn = db.get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT d.*, e.name AS user_name FROM devices d"
+            " LEFT JOIN employees e ON e.id = d.employee_id"
+            " WHERE d.asset_no = ?",
+            (asset_no,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    device = dict(row)
+    for key in DATE_FIELDS:
+        if device[key]:
+            device[key] = datetime.date.fromisoformat(device[key])
+    return device
+
+
+def update_device(asset_no, data, db_path=db.DB_PATH):
+    """機器の情報を更新する（F-12）。入力に誤りがあれば ValidationError を出す。
+
+    資産番号・種別・状態・利用者は変更しない。状態と利用者は、割当・返却などの業務操作で変える。
+    """
+    conn = db.get_connection(db_path)
+    try:
+        current = conn.execute("SELECT id, category, status FROM devices WHERE asset_no = ?", (asset_no,)).fetchone()
+        if current is None:
+            raise ValidationError([f"資産番号「{asset_no}」の機器が見つかりません。"])
+        if current["status"] == "disposed":
+            raise ValidationError(["廃棄済の機器は変更できません。"])
+
+        # 種別は画面から送られた値ではなく、登録済みの値を使う（種別は変更させない）
+        values = clean_device_input({**data, "category": current["category"]})
+        errors = validate_device(values, conn, exclude_id=current["id"])
+        if errors:
+            raise ValidationError(errors)
+
+        _dates_to_text(values)
+        del values["category"]
+        assignments = ", ".join(f"{column} = ?" for column in values)
+        with conn:
+            conn.execute(
+                f"UPDATE devices SET {assignments}, updated_at = datetime('now', 'localtime') WHERE id = ?",
+                [*values.values(), current["id"]],
+            )
     finally:
         conn.close()
