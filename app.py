@@ -1,9 +1,9 @@
 import pandas as pd
 import streamlit as st
 
+import auth
 import db
 import devices
-import employees
 import licenses
 
 st.set_page_config(page_title="社内IT資産管理システム", page_icon="💻")
@@ -51,26 +51,51 @@ def show_my_assets(employee_id):
         st.info("割り当てられているライセンスはありません。")
 
 
+def show_login():
+    """ログイン画面（F-01）。成功したらログインした社員の情報を session_state に保存する。"""
+    st.subheader("ログイン")
+    # form にまとめると、ボタンを押したときだけ入力内容が送られる
+    with st.form("login"):
+        code = st.text_input("社員番号")
+        password = st.text_input("パスワード", type="password")
+        submitted = st.form_submit_button("ログイン")
+
+    if submitted:
+        if not code.strip() or not password:
+            st.error("社員番号とパスワードを入力してください。")
+            return
+        user = auth.authenticate(code.strip(), password)
+        if user is None:
+            # どちらが違うかは伝えない（社員番号が存在するかを推測されないため）
+            st.error("社員番号またはパスワードが違います。")
+        else:
+            st.session_state["user"] = user
+            st.rerun()  # ログイン後の画面で描き直す
+
+
 st.title("社内IT資産管理システム")
 
-# 利用者の種類によってメニューを切り替える（仮の切り替え。ログイン機能は後で作る）
-role = st.sidebar.radio("利用者", ["一般社員", "IT管理者"])
+# session_state は、画面を操作しても消えずに残る保存場所。ここにログイン中の社員を入れておく
+user = st.session_state.get("user")
+if user is None:
+    show_login()
+    st.stop()  # ログインしていなければ、ここから下は表示しない
 
-if role == "一般社員":
-    # ログイン機能ができるまでは、誰として操作するかをここで選ぶ
-    staff = {e["id"]: f'{e["employee_code"]} {e["name"]}' for e in employees.list_employees()}
-    employee_id = st.sidebar.selectbox("（仮）ログイン中の社員", list(staff), format_func=staff.get)
-    menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
-else:
+st.sidebar.write(f'{user["name"]}（{"IT管理者" if user["role"] == "admin" else "一般社員"}）')
+if st.sidebar.button("ログアウト"):
+    del st.session_state["user"]
+    st.rerun()
+
+# 権限によって使えるメニューを分ける（F-02）
+if user["role"] == "admin":
     menu = st.sidebar.radio("メニュー", ["資産一覧", "申請の承認", "ライセンス"])
+else:
+    menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
 
 st.header(menu)
 if menu == "資産一覧":
     show_device_list()
 elif menu == "自分の資産":
-    if employee_id is None:
-        st.warning("社員が登録されていません。")
-    else:
-        show_my_assets(employee_id)
+    show_my_assets(user["id"])
 else:
     st.info("この画面はまだ準備中です。")

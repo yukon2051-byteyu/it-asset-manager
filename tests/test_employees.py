@@ -3,9 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import auth
 import db
 import employees
 import seed
+
+# テストを速くするため、パスワード変換の回数を減らす（本番は auth.py の 600,000 回のまま）
+auth.ITERATIONS = 1_000
 
 
 class TestListEmployees(unittest.TestCase):

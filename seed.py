@@ -1,11 +1,16 @@
 """動作確認用の架空のサンプルデータを登録するスクリプト。
 
 すでにデータがある場合は、二重登録やデータの上書きを防ぐため何もしない。
+パスワードは実行のたびにランダムに作り、ソースコードには書かない。
 """
+import secrets
+import string
+
+import auth
 import db
 
-# パスワードはログイン機能を作るときに正しく設定する（それまでは仮の値）
-TEMP_PASSWORD_HASH = "未設定"
+PASSWORD_LENGTH = 12
+PASSWORD_CHARS = string.ascii_letters + string.digits
 
 # 社員（すべて架空）
 EMPLOYEES = [
@@ -68,23 +73,30 @@ DEVICE_COLUMNS = ["asset_no", "category", "maker", "model", "serial_no", "status
                   "os", "screen_size", "imei", "phone_number", "carrier", "contract_end"]
 
 
+def make_password():
+    """推測されにくいランダムなパスワードを作る（secrets は暗号用の乱数を使う）。"""
+    return "".join(secrets.choice(PASSWORD_CHARS) for _ in range(PASSWORD_LENGTH))
+
+
 def seed(db_path=db.DB_PATH):
-    """サンプルデータを登録する。登録したら True、既にデータがあれば何もせず False を返す。"""
+    """サンプルデータを登録し、{社員番号: パスワード} を返す。既にデータがあれば何もせず None を返す。"""
     db.init_db(db_path)
     conn = db.get_connection(db_path)
     try:
         if conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0] > 0:
-            return False
+            return None
 
+        passwords = {}
         # with conn: の中は1つのまとまり（トランザクション）として扱われる。
         # 途中でエラーが起きたら全部取り消されるので、中途半端なデータが残らない
         with conn:
             employee_ids = {}
             for code, name, dept, email, role in EMPLOYEES:
+                passwords[code] = make_password()
                 cur = conn.execute(
                     "INSERT INTO employees (employee_code, name, department, email, role, password_hash)"
                     " VALUES (?, ?, ?, ?, ?, ?)",
-                    (code, name, dept, email, role, TEMP_PASSWORD_HASH),
+                    (code, name, dept, email, role, auth.hash_password(passwords[code])),
                 )
                 employee_ids[code] = cur.lastrowid
 
@@ -116,13 +128,17 @@ def seed(db_path=db.DB_PATH):
                     " VALUES (?, ?, ?, '2026-10-01')",
                     (license_ids[lic_name], emp_id, dev_id),
                 )
-        return True
+        return passwords
     finally:
         conn.close()
 
 
 if __name__ == "__main__":
-    if seed():
-        print("サンプルデータを登録しました。")
-    else:
+    passwords = seed()
+    if passwords is None:
         print("すでにデータがあるため、何もしませんでした。")
+    else:
+        print("サンプルデータを登録しました。")
+        print("ログイン用のパスワードです（この画面でしか表示されません。控えておいてください）:")
+        for code, name, _, _, role in EMPLOYEES:
+            print(f"  {code}  {name}（{'IT管理者' if role == 'admin' else '一般社員'}）  {passwords[code]}")

@@ -3,8 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import auth
 import db
 import seed
+
+# テストを速くするため、パスワード変換の回数を減らす（本番は auth.py の 600,000 回のまま）
+auth.ITERATIONS = 1_000
 
 
 class TestSeed(unittest.TestCase):
@@ -23,7 +27,7 @@ class TestSeed(unittest.TestCase):
             conn.close()
 
     def test_決めた件数のデータが登録される(self):
-        self.assertTrue(seed.seed(self.db_path))
+        self.assertIsNotNone(seed.seed(self.db_path))
         self.assertEqual(self.count("employees"), 5)
         self.assertEqual(self.count("devices"), 10)
         self.assertEqual(self.count("licenses"), 3)
@@ -31,8 +35,26 @@ class TestSeed(unittest.TestCase):
 
     def test_2回目の実行では二重登録しない(self):
         seed.seed(self.db_path)
-        self.assertFalse(seed.seed(self.db_path))
+        self.assertIsNone(seed.seed(self.db_path))
         self.assertEqual(self.count("employees"), 5)
+
+    def test_返されたパスワードで全員ログインできる(self):
+        passwords = seed.seed(self.db_path)
+        self.assertEqual(len(passwords), 5)
+        for code, password in passwords.items():
+            self.assertEqual(len(password), 12)
+            self.assertIsNotNone(auth.authenticate(code, password, self.db_path), code)
+
+    def test_パスワードはそのまま保存されない(self):
+        passwords = seed.seed(self.db_path)
+        conn = db.get_connection(self.db_path)
+        try:
+            stored = [r[0] for r in conn.execute("SELECT password_hash FROM employees")]
+        finally:
+            conn.close()
+        for password in passwords.values():
+            self.assertNotIn(password, stored)
+        self.assertTrue(all(s.startswith("pbkdf2_sha256$") for s in stored))
 
     def test_使用中と貸出中の機器には必ず利用者がいる(self):
         # 設計書 4.2 のルール（プログラム側で守る）をサンプルデータが満たしているか
