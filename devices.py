@@ -1,4 +1,7 @@
 """機器（PC・モニター・スマートフォン）のデータを扱うモジュール。"""
+import datetime
+import re
+
 import db
 
 # データベースに保存するコードと、画面に表示する名前の対応表（設計書 5章）
@@ -16,6 +19,30 @@ STATUS_LABELS = {
     "lost": "紛失",
     "disposed": "廃棄済",
 }
+
+# 資産番号の頭文字（設計書 5.3）
+ASSET_NO_PREFIXES = {
+    "pc": "PC-",
+    "monitor": "MN-",
+    "smartphone": "SP-",
+}
+
+# 登録時に入力する項目。種別ごとの項目は、その種別のときだけ保存する
+COMMON_FIELDS = ["category", "maker", "model", "serial_no", "location", "purchase_date", "warranty_end", "note"]
+CATEGORY_FIELDS = {
+    "pc": ["os"],
+    "monitor": ["screen_size"],
+    "smartphone": ["imei", "phone_number", "carrier", "contract_end"],
+}
+REQUIRED_FIELDS = {"maker": "メーカー", "model": "型番", "serial_no": "シリアル番号"}
+
+
+class ValidationError(Exception):
+    """入力内容に誤りがあることを表すエラー。errors に誤りの一覧を持つ。"""
+
+    def __init__(self, errors):
+        super().__init__("、".join(errors))
+        self.errors = errors
 
 
 def list_devices(categories=None, statuses=None, employee_id=None, db_path=db.DB_PATH):
@@ -65,3 +92,85 @@ def list_devices(categories=None, statuses=None, employee_id=None, db_path=db.DB
         }
         for r in rows
     ]
+
+
+def clean_device_input(data):
+    """入力をそろえる：前後の空白を取り、空欄は None にし、種別に関係ない項目は捨てる。"""
+    fields = COMMON_FIELDS + CATEGORY_FIELDS.get(data.get("category"), [])
+    values = {}
+    for key in fields:
+        value = data.get(key)
+        if isinstance(value, str):
+            value = value.strip() or None
+        values[key] = value
+    return values
+
+
+def validate_device(values, conn):
+    """入力チェック（F-17）。誤りがあれば、画面に出すメッセージの一覧を返す。"""
+    errors = []
+    if values["category"] not in CATEGORY_LABELS:
+        errors.append("種別を選んでください。")
+    for key, label in REQUIRED_FIELDS.items():
+        if not values.get(key):
+            errors.append(f"{label}を入力してください。")
+
+    serial_no = values.get("serial_no")
+    if serial_no and _exists(conn, "serial_no", serial_no):
+        errors.append(f"シリアル番号「{serial_no}」はすでに登録されています。")
+
+    imei = values.get("imei")
+    if imei:
+        # isdigit() は全角数字も通してしまうため、半角数字だけを許す正規表現で確かめる
+        if not re.fullmatch(r"[0-9]{15}", imei):
+            errors.append("IMEIは15桁の半角数字で入力してください。")
+        elif _exists(conn, "imei", imei):
+            errors.append(f"IMEI「{imei}」はすでに登録されています。")
+
+    purchase, warranty = values.get("purchase_date"), values.get("warranty_end")
+    if purchase and warranty and warranty < purchase:
+        errors.append("保証期限は購入日より後の日付にしてください。")
+
+    size = values.get("screen_size")
+    if size is not None and size <= 0:
+        errors.append("画面サイズは0より大きい値を入力してください。")
+    return errors
+
+
+def _exists(conn, column, value):
+    """devices の指定した列に、同じ値がすでにあるか。column にはプログラム内の固定の列名だけを渡す。"""
+    return conn.execute(f"SELECT 1 FROM devices WHERE {column} = ?", (value,)).fetchone() is not None
+
+
+def next_asset_no(conn, category):
+    """次の資産番号を作る（例：PC-0006 まであれば PC-0007）。廃棄済みの番号も数えるので、番号は使い回さない。"""
+    prefix = ASSET_NO_PREFIXES[category]
+    rows = conn.execute("SELECT asset_no FROM devices WHERE asset_no LIKE ?", (prefix + "%",)).fetchall()
+    numbers = [int(r["asset_no"][len(prefix):]) for r in rows if r["asset_no"][len(prefix):].isdigit()]
+    return f"{prefix}{max(numbers, default=0) + 1:04d}"
+
+
+def register_device(data, db_path=db.DB_PATH):
+    """機器を「在庫」の状態で登録し（F-11）、発行した資産番号を返す。入力に誤りがあれば ValidationError を出す。"""
+    values = clean_device_input(data)
+    conn = db.get_connection(db_path)
+    try:
+        errors = validate_device(values, conn)
+        if errors:
+            raise ValidationError(errors)
+
+        # 日付は「YYYY-MM-DD」の文字列で保存する（設計書 1章）
+        for key, value in values.items():
+            if isinstance(value, datetime.date):
+                values[key] = value.isoformat()
+
+        with conn:
+            asset_no = next_asset_no(conn, values["category"])
+            columns = ["asset_no", *values]
+            conn.execute(
+                f"INSERT INTO devices ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                [asset_no, *values.values()],
+            )
+        return asset_no
+    finally:
+        conn.close()

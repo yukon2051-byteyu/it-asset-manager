@@ -33,6 +33,41 @@ def show_device_list():
         st.info("条件に合う機器はありません。")
 
 
+def show_device_register():
+    """資産登録（F-11）：新しい機器を「在庫」の状態で登録する。"""
+    # 種別は form の外に置く。form の中だと、ボタンを押すまで種別ごとの項目が切り替わらないため
+    category = st.selectbox("種別", list(devices.CATEGORY_LABELS), format_func=devices.CATEGORY_LABELS.get)
+
+    with st.form("device_register"):
+        data = {"category": category}
+        data["maker"] = st.text_input("メーカー（必須）")
+        data["model"] = st.text_input("型番（必須）")
+        data["serial_no"] = st.text_input("シリアル番号（必須）")
+        if category == "pc":
+            data["os"] = st.text_input("OS", placeholder="例：Windows 11")
+        elif category == "monitor":
+            data["screen_size"] = st.number_input("画面サイズ（インチ）", value=None, min_value=0.0, step=0.1)
+        elif category == "smartphone":
+            data["imei"] = st.text_input("IMEI（15桁の数字）")
+            data["phone_number"] = st.text_input("電話番号")
+            data["carrier"] = st.text_input("通信キャリア")
+            data["contract_end"] = st.date_input("契約期限", value=None)
+        data["location"] = st.text_input("設置場所", placeholder="例：情報システム部 倉庫")
+        data["purchase_date"] = st.date_input("購入日", value=None)
+        data["warranty_end"] = st.date_input("保証期限", value=None)
+        data["note"] = st.text_area("備考")
+        submitted = st.form_submit_button("登録する")
+
+    if submitted:
+        try:
+            asset_no = devices.register_device(data)
+        except devices.ValidationError as e:
+            for message in e.errors:
+                st.error(message)
+        else:
+            st.success(f"登録しました。資産番号は {asset_no} です。機器にラベルを貼ってください。")
+
+
 def show_my_assets(employee_id):
     """自分の資産（UC-02）：自分が利用している機器とライセンスを表示する。"""
     st.subheader("機器")
@@ -88,13 +123,15 @@ if st.sidebar.button("ログアウト"):
 
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
-    menu = st.sidebar.radio("メニュー", ["資産一覧", "申請の承認", "ライセンス"])
+    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "申請の承認", "ライセンス"])
 else:
     menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
 
 st.header(menu)
 if menu == "資産一覧":
     show_device_list()
+elif menu == "資産登録":
+    show_device_register()
 elif menu == "自分の資産":
     show_my_assets(user["id"])
 else:
