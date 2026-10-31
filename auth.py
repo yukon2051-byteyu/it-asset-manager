@@ -2,11 +2,20 @@
 import hashlib
 import hmac
 import secrets
+import string
 
 import db
 
 # 変換を繰り返す回数。多いほど総当たり攻撃に時間がかかる
 ITERATIONS = 600_000
+
+PASSWORD_LENGTH = 12
+PASSWORD_CHARS = string.ascii_letters + string.digits
+
+
+def make_password():
+    """推測されにくいランダムなパスワードを作る（secrets は暗号用の乱数を使う）。"""
+    return "".join(secrets.choice(PASSWORD_CHARS) for _ in range(PASSWORD_LENGTH))
 
 
 def hash_password(password):

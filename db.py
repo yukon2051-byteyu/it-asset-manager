@@ -2,11 +2,13 @@
 
 テーブルの内容は docs/basic-design-db.md の設計に合わせている。
 """
+import os
 import sqlite3
 from pathlib import Path
 
-# データベースファイルの保存場所（このファイルと同じフォルダの assets.db）
-DB_PATH = Path(__file__).parent / "assets.db"
+# データベースファイルの保存場所。通常はこのファイルと同じフォルダの assets.db。
+# 環境変数 ASSETS_DB_PATH を設定すると、そのファイルを使う（画面の確認を本番のデータと分けて行うため）
+DB_PATH = Path(os.environ.get("ASSETS_DB_PATH") or Path(__file__).parent / "assets.db")
 
 # テーブルを作るSQL。IF NOT EXISTS により、すでにテーブルがあれば何もしない
 SCHEMA = """
@@ -92,7 +94,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     id           INTEGER PRIMARY KEY,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     actor_id     INTEGER REFERENCES employees(id),
-    target_type  TEXT    NOT NULL CHECK (target_type IN ('device', 'license', 'request')),
+    target_type  TEXT    NOT NULL CHECK (target_type IN ('device', 'license', 'request', 'employee')),
     target_id    INTEGER NOT NULL,
     target_label TEXT    NOT NULL,
     action       TEXT    NOT NULL,
@@ -130,10 +132,36 @@ def like_pattern(keyword):
     return f"%{escaped}%"
 
 
+def _migrate(conn):
+    """古い構造のデータベースを、データを残したまま新しい構造に移す（マイグレーション）。
+
+    v0.3 の audit_logs は対象の種類に「社員（employee）」を含まないルールで作られている。
+    SQLite は既存テーブルのルール（CHECK）を変更できないため、作り直してデータを移す。
+    """
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").fetchone()
+    if row is None or "'employee'" in row["sql"]:
+        return  # まだテーブルがない、またはすでに新しい構造
+    conn.executescript(
+        """
+        BEGIN;
+        DROP TRIGGER IF EXISTS audit_logs_no_update;
+        DROP TRIGGER IF EXISTS audit_logs_no_delete;
+        ALTER TABLE audit_logs RENAME TO audit_logs_old;
+        """
+        + SCHEMA  # 新しいルールの audit_logs と、書き換え禁止のトリガーを作る
+        + """
+        INSERT INTO audit_logs SELECT * FROM audit_logs_old;
+        DROP TABLE audit_logs_old;
+        COMMIT;
+        """
+    )
+
+
 def init_db(db_path=DB_PATH):
     """テーブルを作る。何度実行しても、既存のデータは消えない。"""
     conn = get_connection(db_path)
     try:
+        _migrate(conn)
         conn.executescript(SCHEMA)
     finally:
         conn.close()

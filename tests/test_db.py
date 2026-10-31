@@ -63,6 +63,34 @@ class TestDatabase(unittest.TestCase):
         names = {row["name"] for row in rows}
         self.assertEqual(names, {"employees", "devices", "licenses", "license_assignments", "requests", "audit_logs"})
 
+    def test_古い構造の操作履歴をデータを残したまま移行できる(self):
+        # v0.3 の構造（対象の種類に employee がない）のデータベースを作る
+        old_db = Path(self.tmpdir.name) / "old.db"
+        old_schema = db.SCHEMA.replace("'request', 'employee'", "'request'")
+        conn = db.get_connection(old_db)
+        conn.executescript(old_schema)
+        with conn:
+            conn.execute("INSERT INTO audit_logs (target_type, target_id, target_label, action, detail)"
+                         " VALUES ('device', 1, 'PC-0001', 'update', '移行前の履歴')")
+        conn.close()
+
+        db.init_db(old_db)
+        db.init_db(old_db)  # 2回目は何もしない
+
+        conn = db.get_connection(old_db)
+        try:
+            rows = conn.execute("SELECT target_label, detail FROM audit_logs").fetchall()
+            self.assertEqual([tuple(r) for r in rows], [("PC-0001", "移行前の履歴")])  # 古い履歴が残っている
+            with conn:
+                conn.execute("INSERT INTO audit_logs (target_type, target_id, target_label, action)"
+                             " VALUES ('employee', 1, 'E0001', 'update')")  # 新しい種類が使える
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute("DELETE FROM audit_logs")  # 書き換え禁止のトリガーも作り直されている
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            self.assertNotIn("audit_logs_old", tables)
+        finally:
+            conn.close()
+
     def test_init_dbを2回実行してもデータが消えない(self):
         self.add_employee()
         self.conn.commit()

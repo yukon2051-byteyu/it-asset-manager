@@ -21,6 +21,100 @@ def actor():
     return st.session_state["user"]["id"]
 
 
+def employee_form_fields(emp=None, key=""):
+    """社員の入力欄（登録と変更で共通）。社員番号は登録のときだけ入力する。"""
+    emp = emp or {}
+    data = {}
+    if not emp:
+        data["employee_code"] = st.text_input("社員番号（必須・半角英数字）", placeholder="例：E0006", key=key + "code")
+    data["name"] = st.text_input("氏名（必須）", value=emp.get("name", ""), key=key + "name")
+    data["department"] = st.text_input("部署（必須）", value=emp.get("department", ""), key=key + "department")
+    data["email"] = st.text_input("メールアドレス（必須）", value=emp.get("email", ""), key=key + "email")
+    roles = list(employees.ROLE_LABELS)
+    data["role"] = st.radio("権限", roles, format_func=employees.ROLE_LABELS.get, horizontal=True,
+                            index=roles.index(emp.get("role", "user")), key=key + "role")
+    return data
+
+
+def show_password_once(message, password):
+    """発行したパスワードを、次の画面で1回だけ表示するために保存する。"""
+    st.session_state["password_notice"] = (message, password)
+
+
+def show_employee_manage():
+    """利用者管理（F-54）：社員の登録・変更・退職処理・再有効化・パスワード再発行。"""
+    flash("employee_message")
+    if "password_notice" in st.session_state:
+        message, password = st.session_state.pop("password_notice")
+        st.success(message)
+        st.warning(f"初期パスワード：`{password}`\n\nこの画面でしか表示されません。本人に安全な方法で伝えてください。")
+
+    rows = employees.list_all_employees()
+    tab_list, tab_new, tab_edit = st.tabs(["一覧", "登録", "変更・退職・パスワード"])
+
+    with tab_list:
+        st.dataframe(pd.DataFrame(rows).drop(columns=["id"]), hide_index=True)
+
+    with tab_new:
+        with st.form("employee_new"):
+            data = employee_form_fields(key="new_emp_")
+            submitted = st.form_submit_button("登録する")
+        if submitted:
+            try:
+                _, password = employees.register_employee(data, actor_id=actor())
+            except devices.ValidationError as e:
+                show_errors(e.errors, "登録できませんでした。")
+            else:
+                show_password_once(f'社員「{data["name"].strip()}」を登録しました。', password)
+                st.rerun()
+
+    with tab_edit:
+        labels = {r["id"]: f'{r["社員番号"]} {r["氏名"]}（{r["在籍"]}）' for r in rows}
+        employee_id = st.selectbox("社員", list(labels), format_func=labels.get, key="edit_employee")
+        emp = employees.get_employee(employee_id)
+
+        if emp["is_active"]:
+            with st.form(f"employee_edit_{employee_id}"):
+                data = employee_form_fields(emp, key=f"edit_emp_{employee_id}_")
+                submitted = st.form_submit_button("変更する")
+            if submitted:
+                try:
+                    employees.update_employee(employee_id, data, actor_id=actor())
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "変更できませんでした。")
+                else:
+                    done("employee_message", f'{emp["employee_code"]} の情報を変更しました。')
+
+            col1, col2 = st.columns(2)
+            if col1.button("パスワードを再発行する", key=f"reset_{employee_id}"):
+                try:
+                    password = employees.reset_password(employee_id, actor_id=actor())
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "再発行できませんでした。")
+                else:
+                    show_password_once(f'{emp["employee_code"]} {emp["name"]} のパスワードを再発行しました。', password)
+                    st.rerun()
+            confirm = col2.checkbox("退職処理を行う（ログインできなくなります）", key=f"confirm_deactivate_{employee_id}")
+            if col2.button("退職処理する", disabled=not confirm, key=f"deactivate_{employee_id}"):
+                try:
+                    released = employees.deactivate_employee(employee_id, actor_id=actor())
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "退職処理できませんでした。")
+                else:
+                    extra = f"（ライセンス {released} 件を解除）" if released else ""
+                    done("employee_message", f'{emp["employee_code"]} {emp["name"]} を退職処理しました{extra}。')
+        else:
+            st.info("この社員は退職処理済みです。情報を変更するには、先に再有効化してください。")
+            if st.button("再有効化する", key=f"reactivate_{employee_id}"):
+                try:
+                    employees.reactivate_employee(employee_id, actor_id=actor())
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "再有効化できませんでした。")
+                else:
+                    done("employee_message", f'{emp["employee_code"]} {emp["name"]} を再有効化しました。'
+                                             "パスワードは、必要に応じて再発行してください。")
+
+
 def show_audit_logs():
     """操作履歴（F-53）：誰が・いつ・何を・どう変えたかを確認する。履歴は変更・削除できない。"""
     col1, col2 = st.columns([1, 2])
@@ -517,11 +611,23 @@ st.title("社内IT資産管理システム")
 
 # session_state は、画面を操作しても消えずに残る保存場所。ここにログイン中の社員を入れておく
 user = st.session_state.get("user")
+if user is not None:
+    # 画面を操作するたびに、在籍と権限をデータベースで確かめ直す。
+    # ログイン中に退職処理や権限の変更をされても、次の操作から反映されるようにするため
+    latest = employees.get_employee(user["id"])
+    if latest is None or not latest["is_active"]:
+        del st.session_state["user"]
+        st.session_state["logout_message"] = "利用できないアカウントになったため、ログアウトしました。"
+        user = None
+    else:
+        user = st.session_state["user"] = {**user, **latest}
 if user is None:
+    if "logout_message" in st.session_state:
+        st.warning(st.session_state.pop("logout_message"))
     show_login()
     st.stop()  # ログインしていなければ、ここから下は表示しない
 
-st.sidebar.write(f'{user["name"]}（{"IT管理者" if user["role"] == "admin" else "一般社員"}）')
+st.sidebar.write(f'{user["name"]}（{employees.ROLE_LABELS[user["role"]]}）')
 if st.sidebar.button("ログアウト"):
     del st.session_state["user"]
     st.rerun()
@@ -529,7 +635,7 @@ if st.sidebar.button("ログアウト"):
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
     menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "CSV一括登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス",
-                                       "操作履歴"])
+                                       "利用者管理", "操作履歴"])
 else:
     menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
 
@@ -548,6 +654,8 @@ elif menu == "ライセンス":
     show_licenses()
 elif menu == "申請の承認":
     show_request_review(user)
+elif menu == "利用者管理":
+    show_employee_manage()
 elif menu == "操作履歴":
     show_audit_logs()
 elif menu == "自分の資産":

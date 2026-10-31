@@ -2,7 +2,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| 版数 | 0.3 |
+| 版数 | 0.4 |
 | 作成日 | 2026-10-31 |
 | 前提文書 | [要件定義書](requirements.md)、[技術選定書](tech-selection.md) |
 
@@ -156,15 +156,17 @@ erDiagram
 | id | ID | 整数 | 主キー | 1 |
 | created_at | 日時 | 文字 | 必須 | 2026-11-01 10:15:00 |
 | actor_id | 操作者 | 整数 | 外部キー（employees）。空欄＝不明 | 1 |
-| target_type | 対象の種類 | 文字 | 必須（`device` / `license` / `request`） | device |
+| target_type | 対象の種類 | 文字 | 必須（`device` / `license` / `request` / `employee`） | device |
 | target_id | 対象のID | 整数 | 必須 | 5 |
 | target_label | 対象名 | 文字 | 必須。記録した時点の資産番号・ライセンス名・申請番号 | PC-0005 |
-| action | 操作 | 文字 | 必須（create / import / update / status / assign / release / request / approve / hold / reject） | status |
+| action | 操作 | 文字 | 必須（create / import / update / status / assign / release / request / approve / hold / reject / deactivate / reactivate / reset_password） | status |
 | detail | 内容 | 文字 | 変わった項目と変更前後の値 | 割当：在庫 → 使用中、利用者：なし → 高橋 美咲 |
 
 - 変更と同じトランザクションで記録する。変更が取り消されたら、履歴も残らない
 - トリガー（データベースの自動処理）で、UPDATE・DELETE を禁止する（要件定義書 N-11）
 - 状態の変更では利用者の変化も記録するので、「誰がいつからいつまで機器を使っていたか」を追える
+- パスワードの発行・再発行では、パスワードそのものは記録しない
+- v0.3 で作ったデータベースは、起動時に対象の種類へ `employee` を加えた構造へ移行する（履歴は残る。`db._migrate`）
 
 ## 5. コードの一覧
 
@@ -211,3 +213,4 @@ erDiagram
 | 0.1 | 2026-10-31 | 初版作成 |
 | 0.2 | 2026-10-31 | requests（申請）テーブルの定義を追加 |
 | 0.3 | 2026-11-01 | audit_logs（操作履歴）テーブルの定義を追加 |
+| 0.4 | 2026-11-01 | 操作履歴の対象に社員を追加（利用者管理 F-54）、移行手順を記載 |

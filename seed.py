@@ -3,14 +3,8 @@
 すでにデータがある場合は、二重登録やデータの上書きを防ぐため何もしない。
 パスワードは実行のたびにランダムに作り、ソースコードには書かない。
 """
-import secrets
-import string
-
 import auth
 import db
-
-PASSWORD_LENGTH = 12
-PASSWORD_CHARS = string.ascii_letters + string.digits
 
 # 社員（すべて架空）
 EMPLOYEES = [
@@ -73,10 +67,6 @@ DEVICE_COLUMNS = ["asset_no", "category", "maker", "model", "serial_no", "status
                   "os", "screen_size", "imei", "phone_number", "carrier", "contract_end"]
 
 
-def make_password():
-    """推測されにくいランダムなパスワードを作る（secrets は暗号用の乱数を使う）。"""
-    return "".join(secrets.choice(PASSWORD_CHARS) for _ in range(PASSWORD_LENGTH))
-
 
 def seed(db_path=db.DB_PATH):
     """サンプルデータを登録し、{社員番号: パスワード} を返す。既にデータがあれば何もせず None を返す。"""
@@ -92,7 +82,7 @@ def seed(db_path=db.DB_PATH):
         with conn:
             employee_ids = {}
             for code, name, dept, email, role in EMPLOYEES:
-                passwords[code] = make_password()
+                passwords[code] = auth.make_password()
                 cur = conn.execute(
                     "INSERT INTO employees (employee_code, name, department, email, role, password_hash)"
                     " VALUES (?, ?, ?, ?, ?, ?)",

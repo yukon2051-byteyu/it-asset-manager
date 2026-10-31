@@ -7,8 +7,11 @@ import unicodedata
 
 import db
 
-TARGET_LABELS = {"device": "機器", "license": "ライセンス", "request": "申請"}
+TARGET_LABELS = {"device": "機器", "license": "ライセンス", "request": "申請", "employee": "社員"}
 ACTION_LABELS = {
+    "deactivate": "退職処理",
+    "reactivate": "再有効化",
+    "reset_password": "パスワード再発行",
     "create": "登録",
     "import": "CSV取込",
     "update": "変更",
