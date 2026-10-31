@@ -241,3 +241,66 @@ def update_device(asset_no, data, db_path=db.DB_PATH):
             )
     finally:
         conn.close()
+
+
+# 状態を変える操作：(操作できる元の状態, 操作後の状態)。要件定義書 4.1 の図にもとづく
+TRANSITIONS = {
+    "assign": ({"in_stock"}, "in_use"),
+    "return": ({"in_use", "lent"}, "in_stock"),
+    "dispose": ({"in_stock", "repair"}, "disposed"),
+}
+ACTION_LABELS = {"assign": "割当", "return": "返却", "dispose": "廃棄"}
+
+
+def available_actions(status):
+    """今の状態からできる操作の一覧を返す（例：在庫なら割当と廃棄）。"""
+    return [action for action, (sources, _) in TRANSITIONS.items() if status in sources]
+
+
+def change_status(asset_no, action, employee_id=None, db_path=db.DB_PATH):
+    """割当・返却・廃棄（F-25 / F-16）で機器の状態を変え、変更後の状態を返す。
+
+    状態と利用者は必ずセットで変える。ルールに合わない操作は ValidationError を出す。
+    """
+    if action not in TRANSITIONS:
+        raise ValidationError(["操作が正しくありません。"])
+    sources, new_status = TRANSITIONS[action]
+
+    conn = db.get_connection(db_path)
+    try:
+        current = conn.execute("SELECT id, status FROM devices WHERE asset_no = ?", (asset_no,)).fetchone()
+        if current is None:
+            raise ValidationError([f"資産番号「{asset_no}」の機器が見つかりません。"])
+        if current["status"] not in sources:
+            raise ValidationError([f"{STATUS_LABELS[current['status']]}の機器は{ACTION_LABELS[action]}できません。"])
+
+        new_employee_id = None  # 返却・廃棄では利用者を外す
+        if action == "assign":
+            if employee_id is None:
+                raise ValidationError(["割り当てる社員を選んでください。"])
+            active = conn.execute(
+                "SELECT 1 FROM employees WHERE id = ? AND is_active = 1", (employee_id,)
+            ).fetchone()
+            if active is None:
+                raise ValidationError(["在籍中の社員を選んでください。"])
+            new_employee_id = employee_id
+
+        with conn:
+            # 「状態が確認したときのままなら」という条件付きで更新する。
+            # 確認と保存の間にほかの人が状態を変えていたら、1件も更新されない
+            cur = conn.execute(
+                "UPDATE devices SET status = ?, employee_id = ?, updated_at = datetime('now', 'localtime')"
+                " WHERE id = ? AND status = ?",
+                (new_status, new_employee_id, current["id"], current["status"]),
+            )
+            if cur.rowcount == 0:
+                raise ValidationError(["ほかの人が先にこの機器を変更しました。画面を読み込み直してください。"])
+            if action == "dispose":
+                # 廃棄したPCに割り当てていたライセンスを解除し、残数に戻す
+                conn.execute(
+                    "UPDATE license_assignments SET released_on = ? WHERE device_id = ? AND released_on IS NULL",
+                    (datetime.date.today().isoformat(), current["id"]),
+                )
+        return new_status
+    finally:
+        conn.close()

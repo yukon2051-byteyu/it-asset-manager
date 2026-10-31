@@ -4,6 +4,7 @@ import streamlit as st
 import auth
 import db
 import devices
+import employees
 import licenses
 
 st.set_page_config(page_title="社内IT資産管理システム", page_icon="💻")
@@ -122,6 +123,51 @@ def show_device_edit():
             st.success(f"{asset_no} を更新しました。")
 
 
+def show_device_status():
+    """割当・返却・廃棄（F-25 / F-16）：業務の操作として機器の状態を変える。"""
+    # 前回の操作結果を表示する（操作後に画面を描き直すと、メッセージが消えてしまうため）
+    if "status_message" in st.session_state:
+        st.success(st.session_state.pop("status_message"))
+
+    rows = devices.list_devices()
+    if not rows:
+        st.info("登録されている機器はありません。")
+        return
+    labels = {r["資産番号"]: f'{r["資産番号"]}　{r["メーカー"]} {r["型番"]}（{r["状態"]}）' for r in rows}
+    asset_no = st.selectbox("対象の機器", list(labels), format_func=labels.get, key="status_target")
+
+    device = devices.get_device(asset_no)
+    st.caption(f'状態：{devices.STATUS_LABELS[device["status"]]}　利用者：{device["user_name"] or "なし"}')
+
+    actions = devices.available_actions(device["status"])
+    if not actions:
+        st.info(f'{devices.STATUS_LABELS[device["status"]]}の機器にできる操作はありません。')
+        return
+    action = st.radio("操作", actions, format_func=devices.ACTION_LABELS.get, horizontal=True, key=f"action_{asset_no}")
+
+    employee_id = None
+    ready = True
+    if action == "assign":
+        staff = {e["id"]: f'{e["employee_code"]} {e["name"]}（{e["department"]}）' for e in employees.list_employees()}
+        employee_id = st.selectbox("割り当てる社員", list(staff), format_func=staff.get, index=None,
+                                   placeholder="選んでください", key=f"assignee_{asset_no}")
+    elif action == "dispose":
+        st.warning("廃棄すると元に戻せません。このPCに割り当てているライセンスも解除されます。")
+        ready = st.checkbox("内容を確認しました", key=f"confirm_{asset_no}")
+
+    if st.button("実行する", type="primary", disabled=not ready):
+        try:
+            new_status = devices.change_status(asset_no, action, employee_id)
+        except devices.ValidationError as e:
+            for message in e.errors:
+                st.error(message)
+        else:
+            st.session_state["status_message"] = (
+                f"{asset_no} を{devices.ACTION_LABELS[action]}しました（状態：{devices.STATUS_LABELS[new_status]}）。"
+            )
+            st.rerun()  # 新しい状態で、できる操作を表示し直す
+
+
 def show_my_assets(employee_id):
     """自分の資産（UC-02）：自分が利用している機器とライセンスを表示する。"""
     st.subheader("機器")
@@ -177,7 +223,7 @@ if st.sidebar.button("ログアウト"):
 
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
-    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "資産更新", "申請の承認", "ライセンス"])
+    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス"])
 else:
     menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
 
@@ -188,6 +234,8 @@ elif menu == "資産登録":
     show_device_register()
 elif menu == "資産更新":
     show_device_edit()
+elif menu == "割当・返却・廃棄":
+    show_device_status()
 elif menu == "自分の資産":
     show_my_assets(user["id"])
 else:
