@@ -51,6 +51,16 @@ class TestListDevices(unittest.TestCase):
         self.assertEqual(row["利用者"], "伊藤 さくら")
         self.assertEqual(row["部署"], "総務部")
 
+    def test_利用者で絞り込める(self):
+        # seed.py では E0002（鈴木 一郎）は id=2 で、PC・モニター・スマホを1台ずつ利用している
+        rows = devices.list_devices(employee_id=2, db_path=self.db_path)
+        self.assertEqual(self.asset_nos(rows), ["MN-0001", "PC-0001", "SP-0001"])
+
+    def test_機器を持たない社員は空のリスト(self):
+        # E0001（佐藤 花子）は機器を利用していない
+        rows = devices.list_devices(employee_id=1, db_path=self.db_path)
+        self.assertEqual(rows, [])
+
     def test_利用者がいない機器は空文字で表示される(self):
         row = devices.list_devices(statuses=["repair"], db_path=self.db_path)[0]
         self.assertEqual(row["利用者"], "")

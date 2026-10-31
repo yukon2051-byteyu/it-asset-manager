@@ -18,11 +18,12 @@ STATUS_LABELS = {
 }
 
 
-def list_devices(categories=None, statuses=None, db_path=db.DB_PATH):
+def list_devices(categories=None, statuses=None, employee_id=None, db_path=db.DB_PATH):
     """機器の一覧を、画面表示用の日本語の列名で返す。
 
     categories / statuses にコードのリストを渡すと、その値だけに絞り込む。
     空のリストや None のときは絞り込まない。
+    employee_id を渡すと、その社員が利用している機器だけに絞り込む。
     """
     sql = (
         "SELECT d.asset_no, d.category, d.maker, d.model, d.status,"
@@ -38,6 +39,9 @@ def list_devices(categories=None, statuses=None, db_path=db.DB_PATH):
     if statuses:
         conditions.append(f"d.status IN ({', '.join('?' for _ in statuses)})")
         params.extend(statuses)
+    if employee_id is not None:
+        conditions.append("d.employee_id = ?")
+        params.append(employee_id)
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY d.asset_no"
