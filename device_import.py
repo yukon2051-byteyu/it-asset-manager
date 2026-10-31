@@ -9,6 +9,7 @@ import sqlite3
 
 import pandas as pd
 
+import audit
 import db
 import devices
 
@@ -191,7 +192,7 @@ def preview_csv(content, db_path=db.DB_PATH):
     ]
 
 
-def import_csv(content, db_path=db.DB_PATH):
+def import_csv(content, db_path=db.DB_PATH, actor_id=None):
     """CSVの機器をまとめて登録し、登録した資産番号の一覧を返す。誤りがあれば1件も登録しない。"""
     df = read_csv(content)
     conn = db.get_connection(db_path)
@@ -201,7 +202,10 @@ def import_csv(content, db_path=db.DB_PATH):
             # 全件を1つのトランザクションで登録する。途中で失敗したら全部取り消される
             with conn:
                 for r in records:
-                    devices.insert_device(conn, r["asset_no"], r["values"], r["employee_id"])
+                    device_id = devices.insert_device(conn, r["asset_no"], r["values"], r["employee_id"])
+                    status = "使用中" if r["employee_id"] else "在庫"
+                    audit.record(conn, actor_id, "device", device_id, r["asset_no"], "import",
+                                 f'{devices.describe_device(r["values"])}、状態：{status}（CSVの{r["line"]}行目）')
         except sqlite3.IntegrityError:
             # チェックのあとに、ほかの人が同じ番号を登録した場合など
             raise devices.ValidationError(["ほかの人が同時に機器を登録したため、取り込めませんでした。もう一度お試しください。"])

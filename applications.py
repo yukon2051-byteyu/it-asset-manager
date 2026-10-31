@@ -4,6 +4,7 @@
 """
 import datetime
 
+import audit
 import db
 import devices
 from devices import ValidationError
@@ -134,6 +135,12 @@ def create_request(requester_id, data, today=None, db_path=db.DB_PATH):
                 " :start_date, :due_date, :occurred_on)",
                 values,
             )
+            if request_type == "lend":
+                target = f'{devices.CATEGORY_LABELS[values["category"]]}（{values["start_date"]}〜{values["due_date"]}）'
+            else:
+                target = conn.execute("SELECT asset_no FROM devices WHERE id = ?", (values["device_id"],)).fetchone()[0]
+            audit.record(conn, requester_id, "request", cur.lastrowid, request_no(cur.lastrowid), "request",
+                         f'{TYPE_LABELS[request_type]}：{target}' + (f'、{values["detail"]}' if values["detail"] else ""))
         return cur.lastrowid
     finally:
         conn.close()
@@ -232,8 +239,11 @@ def approve(request_id, reviewer_id, device_id=None, db_path=db.DB_PATH):
                 if device["employee_id"] != request["requester_id"]:
                     raise ValidationError(["この機器は、もう申請者の利用ではありません。却下してください。"])
                 device_id, employee_id = None, None
-            devices.apply_status_change(conn, device["asset_no"], APPROVE_ACTIONS[request["request_type"]], employee_id)
+            devices.apply_status_change(conn, device["asset_no"], APPROVE_ACTIONS[request["request_type"]],
+                                        employee_id, actor_id=reviewer_id)
             _finish(conn, request, "approved", reviewer_id, device_id=device_id)
+            audit.record(conn, reviewer_id, "request", request_id, request_no(request_id), "approve",
+                         f'{TYPE_LABELS[request["request_type"]]}：{device["asset_no"]}')
     finally:
         conn.close()
 
@@ -246,7 +256,10 @@ def reject(request_id, reviewer_id, reason, db_path=db.DB_PATH):
     conn = db.get_connection(db_path)
     try:
         with conn:
-            _finish(conn, _get_open_request(conn, request_id), "rejected", reviewer_id, reason)
+            request = _get_open_request(conn, request_id)
+            _finish(conn, request, "rejected", reviewer_id, reason)
+            audit.record(conn, reviewer_id, "request", request_id, request_no(request_id), "reject",
+                         f'{TYPE_LABELS[request["request_type"]]}、理由：{reason}')
     finally:
         conn.close()
 
@@ -263,5 +276,6 @@ def hold(request_id, reviewer_id, reason, db_path=db.DB_PATH):
             if request["request_type"] != "lend":
                 raise ValidationError(["保留にできるのは貸出の申請だけです。"])
             _finish(conn, request, "on_hold", reviewer_id, reason)
+            audit.record(conn, reviewer_id, "request", request_id, request_no(request_id), "hold", f"理由：{reason}")
     finally:
         conn.close()

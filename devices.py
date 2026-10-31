@@ -3,6 +3,7 @@ import datetime
 import re
 import unicodedata
 
+import audit
 import db
 
 # データベースに保存するコードと、画面に表示する名前の対応表（設計書 5章）
@@ -37,6 +38,13 @@ CATEGORY_FIELDS = {
 }
 REQUIRED_FIELDS = {"maker": "メーカー", "model": "型番", "serial_no": "シリアル番号"}
 DATE_FIELDS = ["purchase_date", "warranty_end", "contract_end"]
+# 操作履歴で「どの項目が変わったか」を書くときの項目名
+FIELD_LABELS = {
+    "maker": "メーカー", "model": "型番", "serial_no": "シリアル番号", "location": "設置場所",
+    "purchase_date": "購入日", "warranty_end": "保証期限", "os": "OS", "screen_size": "画面サイズ",
+    "imei": "IMEI", "phone_number": "電話番号", "carrier": "通信キャリア", "contract_end": "契約期限",
+    "note": "備考",
+}
 
 
 class ValidationError(Exception):
@@ -45,12 +53,6 @@ class ValidationError(Exception):
     def __init__(self, errors):
         super().__init__("、".join(errors))
         self.errors = errors
-
-
-def _like_pattern(keyword):
-    """部分一致検索用の文字列を作る。% と _ はSQLでは特別な意味を持つので、ただの文字として扱うよう印（\\）を付ける。"""
-    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
 
 
 def list_devices(categories=None, statuses=None, employee_id=None, keyword=None, department=None,
@@ -87,7 +89,7 @@ def list_devices(categories=None, statuses=None, employee_id=None, keyword=None,
         conditions.append(
             "(d.asset_no LIKE ? ESCAPE '\\' OR d.serial_no LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"
         )
-        params.extend([_like_pattern(keyword)] * 3)
+        params.extend([db.like_pattern(keyword)] * 3)
     if department:
         conditions.append("e.department = ?")
         params.append(department)
@@ -183,7 +185,7 @@ def next_asset_no(conn, category):
     return f"{prefix}{max(numbers, default=0) + 1:04d}"
 
 
-def register_device(data, db_path=db.DB_PATH):
+def register_device(data, db_path=db.DB_PATH, actor_id=None):
     """機器を「在庫」の状態で登録し（F-11）、発行した資産番号を返す。入力に誤りがあれば ValidationError を出す。"""
     values = clean_device_input(data)
     conn = db.get_connection(db_path)
@@ -194,14 +196,20 @@ def register_device(data, db_path=db.DB_PATH):
 
         with conn:
             asset_no = next_asset_no(conn, values["category"])
-            insert_device(conn, asset_no, values)
+            device_id = insert_device(conn, asset_no, values)
+            audit.record(conn, actor_id, "device", device_id, asset_no, "create", describe_device(values))
         return asset_no
     finally:
         conn.close()
 
 
+def describe_device(values):
+    """操作履歴に書く、機器の簡単な説明（例：PC サンプル電機 NB-1400（シリアル SN0001））。"""
+    return f'{CATEGORY_LABELS[values["category"]]} {values["maker"]} {values["model"]}（シリアル {values["serial_no"]}）'
+
+
 def insert_device(conn, asset_no, values, employee_id=None):
-    """チェック済みの機器を1台保存する（画面からの登録とCSV取り込みで共通）。
+    """チェック済みの機器を1台保存し、id を返す（画面からの登録とCSV取り込みで共通）。
 
     利用者を指定したら「使用中」、指定しなければ「在庫」で登録する。
     """
@@ -210,10 +218,11 @@ def insert_device(conn, asset_no, values, employee_id=None):
     values["status"] = "in_use" if employee_id is not None else "in_stock"
     values["employee_id"] = employee_id
     columns = ["asset_no", *values]
-    conn.execute(
+    cur = conn.execute(
         f"INSERT INTO devices ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
         [asset_no, *values.values()],
     )
+    return cur.lastrowid
 
 
 def _dates_to_text(values):
@@ -244,14 +253,14 @@ def get_device(asset_no, db_path=db.DB_PATH):
     return device
 
 
-def update_device(asset_no, data, db_path=db.DB_PATH):
+def update_device(asset_no, data, db_path=db.DB_PATH, actor_id=None):
     """機器の情報を更新する（F-12）。入力に誤りがあれば ValidationError を出す。
 
     資産番号・種別・状態・利用者は変更しない。状態と利用者は、割当・返却などの業務操作で変える。
     """
     conn = db.get_connection(db_path)
     try:
-        current = conn.execute("SELECT id, category, status FROM devices WHERE asset_no = ?", (asset_no,)).fetchone()
+        current = conn.execute("SELECT * FROM devices WHERE asset_no = ?", (asset_no,)).fetchone()
         if current is None:
             raise ValidationError([f"資産番号「{asset_no}」の機器が見つかりません。"])
         if current["status"] == "disposed":
@@ -266,11 +275,14 @@ def update_device(asset_no, data, db_path=db.DB_PATH):
         _dates_to_text(values)
         del values["category"]
         assignments = ", ".join(f"{column} = ?" for column in values)
+        changes = audit.describe_changes(dict(current), values, FIELD_LABELS)
         with conn:
             conn.execute(
                 f"UPDATE devices SET {assignments}, updated_at = datetime('now', 'localtime') WHERE id = ?",
                 [*values.values(), current["id"]],
             )
+            if changes:  # 何も変えずに「更新する」を押したときは、履歴に残さない
+                audit.record(conn, actor_id, "device", current["id"], asset_no, "update", changes)
     finally:
         conn.close()
 
@@ -303,17 +315,23 @@ def available_actions(status):
     return [a for a in MANUAL_ACTIONS if status in TRANSITIONS[a][0]]
 
 
-def change_status(asset_no, action, employee_id=None, db_path=db.DB_PATH):
+def change_status(asset_no, action, employee_id=None, db_path=db.DB_PATH, actor_id=None):
     """割当・返却・廃棄など（F-25 / F-16）で機器の状態を変え、変更後の状態を返す。"""
     conn = db.get_connection(db_path)
     try:
         with conn:
-            return apply_status_change(conn, asset_no, action, employee_id)
+            return apply_status_change(conn, asset_no, action, employee_id, actor_id)
     finally:
         conn.close()
 
 
-def apply_status_change(conn, asset_no, action, employee_id=None):
+def _employee_name(conn, employee_id):
+    if employee_id is None:
+        return "なし"
+    return conn.execute("SELECT name FROM employees WHERE id = ?", (employee_id,)).fetchone()["name"]
+
+
+def apply_status_change(conn, asset_no, action, employee_id=None, actor_id=None):
     """状態の変更を、渡された接続の中で行う（申請の承認と同じトランザクションで使うため、確定は呼び出し側）。
 
     状態と利用者は必ずセットで変える。ルールに合わない操作は ValidationError を出す。
@@ -322,7 +340,7 @@ def apply_status_change(conn, asset_no, action, employee_id=None):
         raise ValidationError(["操作が正しくありません。"])
     sources, new_status = TRANSITIONS[action]
 
-    current = conn.execute("SELECT id, status FROM devices WHERE asset_no = ?", (asset_no,)).fetchone()
+    current = conn.execute("SELECT id, status, employee_id FROM devices WHERE asset_no = ?", (asset_no,)).fetchone()
     if current is None:
         raise ValidationError([f"資産番号「{asset_no}」の機器が見つかりません。"])
     if current["status"] not in sources:
@@ -346,10 +364,19 @@ def apply_status_change(conn, asset_no, action, employee_id=None):
     )
     if cur.rowcount == 0:
         raise ValidationError(["ほかの人が先にこの機器を変更しました。画面を読み込み直してください。"])
+
+    # 「誰がいつまで使っていたか」が後から追えるよう、利用者の変化も書く
+    detail = (
+        f"{ACTION_LABELS[action]}：{STATUS_LABELS[current['status']]} → {STATUS_LABELS[new_status]}、"
+        f"利用者：{_employee_name(conn, current['employee_id'])} → {_employee_name(conn, new_employee_id)}"
+    )
     if action in ACTIONS_RELEASING_LICENSES:
         # 廃棄・紛失したPCに割り当てていたライセンスを解除し、残数に戻す
-        conn.execute(
+        released = conn.execute(
             "UPDATE license_assignments SET released_on = ? WHERE device_id = ? AND released_on IS NULL",
             (datetime.date.today().isoformat(), current["id"]),
-        )
+        ).rowcount
+        if released:
+            detail += f"、このPCのライセンス {released} 件を解除"
+    audit.record(conn, actor_id, "device", current["id"], asset_no, "status", detail)
     return new_status

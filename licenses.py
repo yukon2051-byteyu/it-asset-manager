@@ -4,6 +4,7 @@
 """
 import datetime
 
+import audit
 import db
 from devices import ValidationError
 
@@ -11,6 +12,9 @@ LICENSE_TYPE_LABELS = {
     "user": "人単位",
     "device": "PC単位",
 }
+# 操作履歴で「どの項目が変わったか」を書くときの項目名
+FIELD_LABELS = {"name": "ライセンス名", "vendor": "提供元", "quantity": "保有数",
+                "expires_on": "有効期限", "cost": "費用", "note": "備考"}
 
 # 有効期限まで何日を切ったら「期限間近」として警告するか（要件定義書 F-34）
 EXPIRY_WARNING_DAYS = 30
@@ -202,7 +206,7 @@ def _to_db_values(values):
     return values
 
 
-def register_license(data, db_path=db.DB_PATH):
+def register_license(data, db_path=db.DB_PATH, actor_id=None):
     """ライセンスを登録し（F-31）、id を返す。入力に誤りがあれば ValidationError を出す。"""
     values = _clean_license_input(data)
     conn = db.get_connection(db_path)
@@ -217,17 +221,20 @@ def register_license(data, db_path=db.DB_PATH):
                 " VALUES (:name, :vendor, :license_type, :quantity, :expires_on, :cost, :note)",
                 values,
             )
+            audit.record(conn, actor_id, "license", cur.lastrowid, values["name"], "create",
+                         f'{LICENSE_TYPE_LABELS[values["license_type"]]}、保有数 {values["quantity"]}、'
+                         f'有効期限 {values["expires_on"] or "なし"}')
         return cur.lastrowid
     finally:
         conn.close()
 
 
-def update_license(license_id, data, db_path=db.DB_PATH):
+def update_license(license_id, data, db_path=db.DB_PATH, actor_id=None):
     """保有数・有効期限などを変更する。割当の単位は、割当先の種類が変わってしまうため変更しない。"""
     conn = db.get_connection(db_path)
     try:
         current = conn.execute(
-            "SELECT l.license_type, COUNT(a.id) AS assigned FROM licenses l"
+            "SELECT l.*, COUNT(a.id) AS assigned FROM licenses l"
             " LEFT JOIN license_assignments a ON a.license_id = l.id AND a.released_on IS NULL"
             " WHERE l.id = ? GROUP BY l.id",
             (license_id,),
@@ -239,17 +246,28 @@ def update_license(license_id, data, db_path=db.DB_PATH):
         if errors:
             raise ValidationError(errors)
         values = _to_db_values(values)
+        changes = audit.describe_changes(dict(current), values, FIELD_LABELS)
         with conn:
             conn.execute(
                 "UPDATE licenses SET name = :name, vendor = :vendor, quantity = :quantity,"
                 " expires_on = :expires_on, cost = :cost, note = :note WHERE id = :id",
                 {**values, "id": license_id},
             )
+            if changes:
+                audit.record(conn, actor_id, "license", license_id, values["name"], "update", changes)
     finally:
         conn.close()
 
 
-def assign_license(license_id, employee_id=None, device_id=None, today=None, db_path=db.DB_PATH):
+def _target_label(conn, employee_id, device_id):
+    """割当先の表示名（社員なら「E0005 伊藤 さくら」、PCなら資産番号）。"""
+    if employee_id is not None:
+        r = conn.execute("SELECT employee_code, name FROM employees WHERE id = ?", (employee_id,)).fetchone()
+        return f'{r["employee_code"]} {r["name"]}'
+    return conn.execute("SELECT asset_no FROM devices WHERE id = ?", (device_id,)).fetchone()["asset_no"]
+
+
+def assign_license(license_id, employee_id=None, device_id=None, today=None, db_path=db.DB_PATH, actor_id=None):
     """ライセンスを社員（人単位）またはPC（PC単位）に割り当てる（F-32）。"""
     conn = db.get_connection(db_path)
     try:
@@ -296,11 +314,13 @@ def assign_license(license_id, employee_id=None, device_id=None, today=None, db_
             ).fetchone()[0]
             if assigned > lic["quantity"]:
                 raise ValidationError(["残数がないため割り当てられません。"])  # with の中で例外 → 取り消し
+            audit.record(conn, actor_id, "license", license_id, lic["name"], "assign",
+                         f"割当先：{_target_label(conn, employee_id, device_id)}（残数 {lic['quantity'] - assigned}）")
     finally:
         conn.close()
 
 
-def release_license(assignment_id, today=None, db_path=db.DB_PATH):
+def release_license(assignment_id, today=None, db_path=db.DB_PATH, actor_id=None):
     """ライセンスの割当を解除する。記録は消さず、解除日を入れる（残数に戻る）。"""
     conn = db.get_connection(db_path)
     try:
@@ -309,7 +329,14 @@ def release_license(assignment_id, today=None, db_path=db.DB_PATH):
                 "UPDATE license_assignments SET released_on = ? WHERE id = ? AND released_on IS NULL",
                 (_today(today).isoformat(), assignment_id),
             )
-        if cur.rowcount == 0:
-            raise ValidationError(["この割当はすでに解除されています。"])
+            if cur.rowcount == 0:
+                raise ValidationError(["この割当はすでに解除されています。"])
+            a = conn.execute(
+                "SELECT a.license_id, a.employee_id, a.device_id, l.name FROM license_assignments a"
+                " JOIN licenses l ON l.id = a.license_id WHERE a.id = ?",
+                (assignment_id,),
+            ).fetchone()
+            audit.record(conn, actor_id, "license", a["license_id"], a["name"], "release",
+                         f'割当先：{_target_label(conn, a["employee_id"], a["device_id"])}')
     finally:
         conn.close()

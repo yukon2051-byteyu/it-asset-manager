@@ -87,6 +87,27 @@ CREATE TABLE IF NOT EXISTS requests (
     created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     processed_at  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id           INTEGER PRIMARY KEY,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    actor_id     INTEGER REFERENCES employees(id),
+    target_type  TEXT    NOT NULL CHECK (target_type IN ('device', 'license', 'request')),
+    target_id    INTEGER NOT NULL,
+    target_label TEXT    NOT NULL,
+    action       TEXT    NOT NULL,
+    detail       TEXT
+);
+
+-- 操作履歴は、あとから変更・削除できないようにする（要件定義書 N-11）
+CREATE TRIGGER IF NOT EXISTS audit_logs_no_update BEFORE UPDATE ON audit_logs
+BEGIN
+    SELECT RAISE(ABORT, '操作履歴は変更できません');
+END;
+CREATE TRIGGER IF NOT EXISTS audit_logs_no_delete BEFORE DELETE ON audit_logs
+BEGIN
+    SELECT RAISE(ABORT, '操作履歴は削除できません');
+END;
 """
 
 
@@ -98,6 +119,15 @@ def get_connection(db_path=DB_PATH):
     # 結果を row["name"] のように列名で取り出せるようにする
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def like_pattern(keyword):
+    """部分一致検索（LIKE ... ESCAPE '\\'）用の文字列を作る。
+
+    % と _ はSQLでは特別な意味を持つので、ただの文字として扱うよう印（\\）を付ける。
+    """
+    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def init_db(db_path=DB_PATH):

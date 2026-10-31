@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 import applications
+import audit
 import auth
 import db
 import device_import
@@ -13,6 +14,30 @@ st.set_page_config(page_title="社内IT資産管理システム", page_icon="�
 
 # データベースのファイルやテーブルがなければ作る（あれば何もしない）
 db.init_db()
+
+
+def actor():
+    """ログイン中の社員の id（操作履歴に「誰が操作したか」として残す）。"""
+    return st.session_state["user"]["id"]
+
+
+def show_audit_logs():
+    """操作履歴（F-53）：誰が・いつ・何を・どう変えたかを確認する。履歴は変更・削除できない。"""
+    col1, col2 = st.columns([1, 2])
+    target_type = col1.selectbox("対象", list(audit.TARGET_LABELS), format_func=audit.TARGET_LABELS.get,
+                                 index=None, placeholder="すべて")
+    keyword = col2.text_input("キーワード", placeholder="資産番号・ライセンス名・申請番号・社員名など")
+
+    rows = audit.list_logs(target_type=target_type, keyword=keyword)
+    st.caption(f"{len(rows)} 件（新しい順。最大 500 件まで表示）")
+    if not rows:
+        st.info("条件に合う操作履歴はありません。")
+        return
+    df = pd.DataFrame(rows)
+    st.dataframe(df, hide_index=True)
+    # 監査で提出できるよう、表示中の履歴をCSVでダウンロードできるようにする（Excelで開けるよう BOM 付き）
+    st.download_button("CSVでダウンロード", df.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="操作履歴.csv", mime="text/csv")
 
 
 def show_device_list():
@@ -85,7 +110,7 @@ def show_device_register():
 
     if submitted:
         try:
-            asset_no = devices.register_device(data)
+            asset_no = devices.register_device(data, actor_id=actor())
         except devices.ValidationError as e:
             for message in e.errors:
                 st.error(message)
@@ -124,7 +149,7 @@ def show_device_import():
     st.dataframe(pd.DataFrame(preview), hide_index=True)
     if st.button("取り込む", type="primary"):
         try:
-            asset_nos = device_import.import_csv(content)
+            asset_nos = device_import.import_csv(content, actor_id=actor())
         except devices.ValidationError as e:
             show_errors(e.errors, "取り込めませんでした。")
         else:
@@ -160,7 +185,7 @@ def show_device_edit():
 
     if submitted:
         try:
-            devices.update_device(asset_no, data)
+            devices.update_device(asset_no, data, actor_id=actor())
         except devices.ValidationError as e:
             for message in e.errors:
                 st.error(message)
@@ -202,7 +227,7 @@ def show_device_status():
 
     if st.button("実行する", type="primary", disabled=not ready):
         try:
-            new_status = devices.change_status(asset_no, action, employee_id)
+            new_status = devices.change_status(asset_no, action, employee_id, actor_id=actor())
         except devices.ValidationError as e:
             for message in e.errors:
                 st.error(message)
@@ -276,7 +301,7 @@ def show_licenses():
                                             key=f"release_{license_id}")
                 if col2.button("解除する", key=f"release_button_{license_id}"):
                     try:
-                        licenses.release_license(release_id)
+                        licenses.release_license(release_id, actor_id=actor())
                     except devices.ValidationError as e:
                         show_errors(e.errors, "解除できませんでした。")
                     else:
@@ -296,7 +321,7 @@ def show_licenses():
                                          placeholder="選んでください", key=f"assign_pc_{license_id}")
             if st.button("割り当てる", type="primary", key=f"assign_button_{license_id}"):
                 try:
-                    licenses.assign_license(license_id, employee_id=employee_id, device_id=device_id)
+                    licenses.assign_license(license_id, employee_id=employee_id, device_id=device_id, actor_id=actor())
                 except devices.ValidationError as e:
                     show_errors(e.errors, "割り当てられませんでした。")
                 else:
@@ -310,7 +335,7 @@ def show_licenses():
             submitted = st.form_submit_button("登録する")
         if submitted:
             try:
-                licenses.register_license({**data, "license_type": license_type})
+                licenses.register_license({**data, "license_type": license_type}, actor_id=actor())
             except devices.ValidationError as e:
                 show_errors(e.errors, "登録できませんでした。")
             else:
@@ -328,7 +353,7 @@ def show_licenses():
                 submitted = st.form_submit_button("変更する")
             if submitted:
                 try:
-                    licenses.update_license(edit_id, data)
+                    licenses.update_license(edit_id, data, actor_id=actor())
                 except devices.ValidationError as e:
                     show_errors(e.errors, "変更できませんでした。")
                 else:
@@ -503,7 +528,8 @@ if st.sidebar.button("ログアウト"):
 
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
-    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "CSV一括登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス"])
+    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "CSV一括登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス",
+                                       "操作履歴"])
 else:
     menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
 
@@ -522,6 +548,8 @@ elif menu == "ライセンス":
     show_licenses()
 elif menu == "申請の承認":
     show_request_review(user)
+elif menu == "操作履歴":
+    show_audit_logs()
 elif menu == "自分の資産":
     show_my_assets(user["id"])
 elif menu == "申請":
