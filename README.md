@@ -105,7 +105,7 @@ python -m venv .venv
 | [tests/test_db.py](tests/test_db.py) | テーブルの作成、正常な登録、入力ミス（重複・空欄・ありえない値・存在しない社員）の拒否、ライセンス残数の計算 | 15 |
 | [tests/test_seed.py](tests/test_seed.py) | サンプルデータの件数、二重登録の防止、データの整合性、作成したパスワードでのログイン、パスワードがそのまま保存されないこと | 6 |
 | [tests/test_auth.py](tests/test_auth.py) | パスワードのハッシュ化と照合、ログインの成功・失敗（パスワード違い・他人のパスワード・存在しない社員番号・空欄・退職者） | 11 |
-| [tests/test_devices.py](tests/test_devices.py) | 資産一覧の絞り込み（種別・状態・利用者・組み合わせ・該当なし）と日本語表示 | 10 |
+| [tests/test_devices.py](tests/test_devices.py) | 資産一覧の絞り込みと検索（種別・状態・利用者・部署・キーワード、全角や小文字の入力、記号の扱い、組み合わせ・該当なし）と日本語表示 | 18 |
 | [tests/test_device_register.py](tests/test_device_register.py) | 資産登録（番号の自動発行、空白の除去、種別に関係ない項目の破棄、必須・重複・IMEI・日付・画面サイズの入力ミス） | 14 |
 | [tests/test_device_update.py](tests/test_device_update.py) | 資産更新（変更の保存、更新日時、自分自身との重複を除く、種別・状態・利用者が変わらない、必須・重複の入力ミス、廃棄済の変更拒否） | 13 |
 | [tests/test_device_import.py](tests/test_device_import.py) | CSV一括登録（番号の引き継ぎと自動発行、利用者の設定、文字コード、日付の書式、IMEIの先頭の0、ファイル全体の誤り、行ごとの誤りと全件取り消し、ファイル内の重複） | 22 |
