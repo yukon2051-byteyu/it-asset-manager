@@ -1,34 +1,34 @@
-# 画面の色の設定（北欧風・トーンを抑えた配色）
-# パソコンがダークモードの設定でも、明るい配色で表示する
+# 画面の色の設定（北欧風・トーンを抑えた明るい配色）
+# 背景はオフホワイト、アクセントは明るめの青と黄緑
 
 [theme]
 base = "light"
-backgroundColor = "#F6F4EF"            # 背景：生成りのリネン
-secondaryBackgroundColor = "#EAEFEA"   # 入力欄などの背景：淡いセージ
-textColor = "#2F3B42"                  # 文字：深いスレートグレー
-primaryColor = "#5B8C85"               # ボタン・選択中：くすんだシーグリーン
-linkColor = "#4E7896"
-borderColor = "#D8DDD6"
-dataframeHeaderBackgroundColor = "#E2EAF0"
+backgroundColor = "#FBFBF8"            # 背景：オフホワイト
+secondaryBackgroundColor = "#EEF4F8"   # 入力欄などの背景：ごく淡い青
+textColor = "#2F3B45"                  # 文字：深いスレートグレー
+primaryColor = "#4F93C9"               # ボタン・選択中：明るめの青
+linkColor = "#3F7FB3"
+borderColor = "#DCE4EA"
+dataframeHeaderBackgroundColor = "#EAF3DD"   # 表の見出し：淡い黄緑
 baseRadius = "0.6rem"
 
-# お知らせ・成功・注意・エラーの色（原色を避け、彩度を落とした色）
-blueColor = "#6B8FB3"
-blueBackgroundColor = "#E3ECF4"
-blueTextColor = "#3E5F80"
-greenColor = "#6E9C7F"
-greenBackgroundColor = "#E4EFE7"
-greenTextColor = "#3F6B50"
-yellowColor = "#C9A55A"
-yellowBackgroundColor = "#F6EED9"
-yellowTextColor = "#7A5F26"
-redColor = "#C27C74"
-redBackgroundColor = "#F5E3E0"
-redTextColor = "#8A4A43"
-orangeColor = "#D29A6A"
-violetColor = "#9A8DB8"
-grayColor = "#9AA3A6"
+# お知らせ・成功・注意・エラーの色（原色を避け、彩度を少し落とした色）
+blueColor = "#5B9BD0"
+blueBackgroundColor = "#E6F0F9"
+blueTextColor = "#2F6596"
+greenColor = "#8CBF5F"
+greenBackgroundColor = "#EEF6E4"
+greenTextColor = "#4C7A2A"
+yellowColor = "#D9B65C"
+yellowBackgroundColor = "#FBF3DC"
+yellowTextColor = "#7D6222"
+redColor = "#D08A80"
+redBackgroundColor = "#FAE8E5"
+redTextColor = "#8E4A42"
+orangeColor = "#E0A46E"
+violetColor = "#A79BC9"
+grayColor = "#A3ADB3"
 
 [theme.sidebar]
-backgroundColor = "#E6EDE8"            # サイドバー：セージグリーン
-secondaryBackgroundColor = "#F6F4EF"
+backgroundColor = "#E8F1F8"            # サイドバー：淡い空色
+secondaryBackgroundColor = "#FBFBF8"
