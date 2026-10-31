@@ -6,6 +6,7 @@ import streamlit as st
 import applications
 import audit
 import auth
+import charts
 import db
 import device_import
 import devices
@@ -13,6 +14,7 @@ import employees
 import exports
 import inventory
 import licenses
+import reports
 
 st.set_page_config(page_title="社内IT資産管理システム", page_icon="💻")
 
@@ -285,6 +287,52 @@ def show_inventory_admin():
                 show_errors(e.errors, "完了できませんでした。")
             else:
                 done("inventory_message", f"「{inv['name']}」を完了しました。結果は「これまでの棚卸」からダウンロードできます。")
+
+
+def show_reports():
+    """集計レポート（F-52）：機器の台数と、ライセンスの利用率。どのグラフにも、同じ内容の表を添える。"""
+    s = reports.device_summary()
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("機器の総数", s["total"])
+    col2.metric("利用中（使用中＋貸出中）", s["in_use"])
+    col3.metric("在庫", s["in_stock"])
+    col4.metric("要対応（修理中＋紛失）", s["attention"])
+    st.caption(f'廃棄済の機器（{s["disposed"]} 台）は、集計に含めていません。')
+
+    st.subheader("種別ごとの状態")
+    rows = reports.devices_by_category_status()
+    # theme=None：Streamlit の標準の色ではなく、検証した配色（charts.py）を使う
+    st.altair_chart(charts.status_stack_chart(rows), theme=None)
+    df = pd.DataFrame(rows)
+    status_labels = [devices.STATUS_LABELS[x] for x in reports.STATUS_ORDER]
+    table = df.pivot(index="種別", columns="状態", values="台数").reindex(
+        index=list(devices.CATEGORY_LABELS.values()), columns=status_labels).reset_index()
+    with st.expander("表で見る"):
+        st.dataframe(table, hide_index=True)
+        download_buttons(table, "集計_種別ごとの状態", key="report_category")
+
+    st.subheader("部署ごとの利用中の台数")
+    df = pd.DataFrame(reports.devices_by_department())
+    if df.empty:
+        st.info("利用中の機器はありません。")
+    else:
+        st.altair_chart(charts.department_chart(df), theme=None)
+        with st.expander("表で見る"):
+            st.dataframe(df, hide_index=True)
+            download_buttons(df, "集計_部署ごとの台数", key="report_department")
+
+    st.subheader("ライセンスの利用率")
+    df = pd.DataFrame(reports.license_usage())
+    if df.empty:
+        st.info("登録されているライセンスはありません。")
+    else:
+        st.altair_chart(charts.license_chart(df), theme=None)
+        # 注意は色ではなく文字で示す（色だけに頼ると、見分けにくい人がいるため）
+        for r in df[df["注意"] != ""].itertuples():
+            st.caption(f"⚠ {r.ライセンス名}：{r.注意}")
+        with st.expander("表で見る"):
+            st.dataframe(df, hide_index=True)
+            download_buttons(df, "集計_ライセンスの利用率", key="report_license")
 
 
 def show_audit_logs():
@@ -842,7 +890,7 @@ if st.sidebar.button("ログアウト"):
 
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
-    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "CSV一括登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス",
+    menu = st.sidebar.radio("メニュー", ["資産一覧", "集計レポート", "資産登録", "CSV一括登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス",
                                        "棚卸", "利用者管理", "操作履歴"])
 else:
     menu = st.sidebar.radio("メニュー", ["自分の資産", "申請", "棚卸の回答"])
@@ -866,6 +914,8 @@ elif menu == "利用者管理":
     show_employee_manage()
 elif menu == "棚卸":
     show_inventory_admin()
+elif menu == "集計レポート":
+    show_reports()
 elif menu == "操作履歴":
     show_audit_logs()
 elif menu == "自分の資産":
