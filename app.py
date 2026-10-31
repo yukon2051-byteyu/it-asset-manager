@@ -209,6 +209,128 @@ def show_device_status():
             st.rerun()  # 新しい状態で、できる操作を表示し直す
 
 
+def flash(key):
+    """前回の操作の完了メッセージを表示する（画面を描き直すと消えてしまうため、いったん保存してある）。"""
+    if key in st.session_state:
+        st.success(st.session_state.pop(key))
+
+
+def done(key, message):
+    """完了メッセージを保存して、新しいデータで画面を描き直す。"""
+    st.session_state[key] = message
+    st.rerun()
+
+
+def license_form_fields(lic=None, key=""):
+    """ライセンスの入力欄（登録と変更で共通）。lic を渡すと、その値を初期値にする。"""
+    lic = lic or {}
+    data = {}
+    data["name"] = st.text_input("ライセンス名（必須）", value=lic.get("name") or "", key=key + "name")
+    data["vendor"] = st.text_input("提供元", value=lic.get("vendor") or "", key=key + "vendor")
+    data["quantity"] = st.number_input("保有数（必須）", value=lic.get("quantity", 1), min_value=1, step=1,
+                                       key=key + "quantity")
+    data["expires_on"] = st.date_input("有効期限（空欄＝期限なし）", value=lic.get("expires_on"), key=key + "expires_on")
+    data["cost"] = st.number_input("費用（円）", value=lic.get("cost"), min_value=0, step=1000, key=key + "cost")
+    data["note"] = st.text_area("備考", value=lic.get("note") or "", key=key + "note")
+    return data
+
+
+def show_licenses():
+    """ライセンス管理（F-31〜F-34）：一覧・登録・割当と解除・変更。"""
+    flash("license_message")
+    rows = licenses.list_licenses()
+
+    # 期限切れ・期限間近のものは、どのタブを見ていても気づけるよう画面の上部に出す（F-34）
+    for r in rows:
+        if "期限" in r["注意"]:
+            st.warning(f'{r["ライセンス名"]}：{r["注意"].split("・")[0]}（有効期限 {r["有効期限"]}）')
+
+    tab_list, tab_assign, tab_new, tab_edit = st.tabs(["一覧", "割当と解除", "登録", "保有数・期限の変更"])
+
+    with tab_list:
+        if rows:
+            st.dataframe(pd.DataFrame(rows).drop(columns=["id"]), hide_index=True)
+        else:
+            st.info("登録されているライセンスはありません。")
+
+    labels = {r["id"]: f'{r["ライセンス名"]}（残数 {r["残数"]} / {r["保有数"]}）' for r in rows}
+
+    with tab_assign:
+        if not rows:
+            st.info("登録されているライセンスはありません。")
+        else:
+            license_id = st.selectbox("ライセンス", list(labels), format_func=labels.get, key="assign_license")
+            lic = licenses.get_license(license_id)
+            assignments = licenses.list_assignments(license_id)
+
+            st.subheader("割当先")
+            if assignments:
+                st.dataframe(pd.DataFrame(assignments).drop(columns=["id"]), hide_index=True)
+                targets = {a["id"]: a["割当先"] for a in assignments}
+                col1, col2 = st.columns([3, 1])
+                release_id = col1.selectbox("解除する割当先", list(targets), format_func=targets.get,
+                                            key=f"release_{license_id}")
+                if col2.button("解除する", key=f"release_button_{license_id}"):
+                    try:
+                        licenses.release_license(release_id)
+                    except devices.ValidationError as e:
+                        show_errors(e.errors, "解除できませんでした。")
+                    else:
+                        done("license_message", f'{lic["name"]}：{targets[release_id]} の割当を解除しました。')
+            else:
+                st.info("まだ誰にも割り当てていません。")
+
+            st.subheader("新しく割り当てる")
+            employee_id = device_id = None
+            if lic["license_type"] == "user":
+                staff = {e["id"]: f'{e["employee_code"]} {e["name"]}（{e["department"]}）' for e in employees.list_employees()}
+                employee_id = st.selectbox("社員", list(staff), format_func=staff.get, index=None,
+                                           placeholder="選んでください", key=f"assign_emp_{license_id}")
+            else:
+                pcs = licenses.list_assignable_pcs()
+                device_id = st.selectbox("PC", list(pcs), format_func=pcs.get, index=None,
+                                         placeholder="選んでください", key=f"assign_pc_{license_id}")
+            if st.button("割り当てる", type="primary", key=f"assign_button_{license_id}"):
+                try:
+                    licenses.assign_license(license_id, employee_id=employee_id, device_id=device_id)
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "割り当てられませんでした。")
+                else:
+                    done("license_message", f'{lic["name"]} を割り当てました。')
+
+    with tab_new:
+        license_type = st.radio("割当の単位", list(licenses.LICENSE_TYPE_LABELS),
+                                format_func=licenses.LICENSE_TYPE_LABELS.get, horizontal=True, key="new_license_type")
+        with st.form("license_new"):
+            data = license_form_fields(key="new_license_")
+            submitted = st.form_submit_button("登録する")
+        if submitted:
+            try:
+                licenses.register_license({**data, "license_type": license_type})
+            except devices.ValidationError as e:
+                show_errors(e.errors, "登録できませんでした。")
+            else:
+                done("license_message", f'ライセンス「{data["name"].strip()}」を登録しました。')
+
+    with tab_edit:
+        if not rows:
+            st.info("登録されているライセンスはありません。")
+        else:
+            edit_id = st.selectbox("ライセンス", list(labels), format_func=labels.get, key="edit_license")
+            lic = licenses.get_license(edit_id)
+            st.caption(f'割当の単位：{licenses.LICENSE_TYPE_LABELS[lic["license_type"]]}（変更できません）')
+            with st.form(f"license_edit_{edit_id}"):
+                data = license_form_fields(lic, key=f"edit_license_{edit_id}_")
+                submitted = st.form_submit_button("変更する")
+            if submitted:
+                try:
+                    licenses.update_license(edit_id, data)
+                except devices.ValidationError as e:
+                    show_errors(e.errors, "変更できませんでした。")
+                else:
+                    done("license_message", f'ライセンス「{data["name"].strip()}」を変更しました。')
+
+
 def show_my_assets(employee_id):
     """自分の資産（UC-02）：自分が利用している機器とライセンスを表示する。"""
     st.subheader("機器")
@@ -279,6 +401,8 @@ elif menu == "資産更新":
     show_device_edit()
 elif menu == "割当・返却・廃棄":
     show_device_status()
+elif menu == "ライセンス":
+    show_licenses()
 elif menu == "自分の資産":
     show_my_assets(user["id"])
 else:
