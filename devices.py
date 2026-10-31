@@ -171,17 +171,28 @@ def register_device(data, db_path=db.DB_PATH):
         if errors:
             raise ValidationError(errors)
 
-        _dates_to_text(values)
         with conn:
             asset_no = next_asset_no(conn, values["category"])
-            columns = ["asset_no", *values]
-            conn.execute(
-                f"INSERT INTO devices ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
-                [asset_no, *values.values()],
-            )
+            insert_device(conn, asset_no, values)
         return asset_no
     finally:
         conn.close()
+
+
+def insert_device(conn, asset_no, values, employee_id=None):
+    """チェック済みの機器を1台保存する（画面からの登録とCSV取り込みで共通）。
+
+    利用者を指定したら「使用中」、指定しなければ「在庫」で登録する。
+    """
+    values = dict(values)  # 呼び出し元の辞書を書き換えないようにコピーする
+    _dates_to_text(values)
+    values["status"] = "in_use" if employee_id is not None else "in_stock"
+    values["employee_id"] = employee_id
+    columns = ["asset_no", *values]
+    conn.execute(
+        f"INSERT INTO devices ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+        [asset_no, *values.values()],
+    )
 
 
 def _dates_to_text(values):

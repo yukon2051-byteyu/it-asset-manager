@@ -3,6 +3,7 @@ import streamlit as st
 
 import auth
 import db
+import device_import
 import devices
 import employees
 import licenses
@@ -86,6 +87,46 @@ def show_device_register():
                 st.error(message)
         else:
             st.success(f"登録しました。資産番号は {asset_no} です。機器にラベルを貼ってください。")
+
+
+def show_errors(errors, title):
+    """誤りの一覧を、1つの枠にまとめて表示する（行数が多くても見やすいように）。"""
+    st.error(title + "\n\n" + "\n".join(f"- {message}" for message in errors))
+
+
+def show_device_import():
+    """CSV一括登録（F-15）：既存の台帳をCSVで取り込む。1件でも誤りがあれば全件取り込まない。"""
+    if "import_message" in st.session_state:
+        st.success(st.session_state.pop("import_message"))
+
+    st.write("既存の台帳をCSVファイルで取り込みます。1件でも誤りがあると、全件取り込みません。")
+    st.download_button("ひな形をダウンロード", device_import.template_csv(),
+                       file_name="機器取込ひな形.csv", mime="text/csv")
+
+    # 取り込み後にファイル選択欄を空に戻すため、key を変えられるようにしておく
+    uploader_key = f'import_file_{st.session_state.get("import_count", 0)}'
+    file = st.file_uploader("CSVファイル", type="csv", key=uploader_key)
+    if file is None:
+        return
+    content = file.getvalue()
+
+    try:
+        preview = device_import.preview_csv(content)
+    except devices.ValidationError as e:
+        show_errors(e.errors, "取り込めません。次の誤りを直してから、もう一度ファイルを選んでください。")
+        return
+
+    st.write(f"次の {len(preview)} 件を取り込みます。内容を確認してください。")
+    st.dataframe(pd.DataFrame(preview), hide_index=True)
+    if st.button("取り込む", type="primary"):
+        try:
+            asset_nos = device_import.import_csv(content)
+        except devices.ValidationError as e:
+            show_errors(e.errors, "取り込めませんでした。")
+        else:
+            st.session_state["import_message"] = f"{len(asset_nos)} 件を登録しました（{asset_nos[0]} ほか）。"
+            st.session_state["import_count"] = st.session_state.get("import_count", 0) + 1
+            st.rerun()
 
 
 def show_device_edit():
@@ -223,7 +264,7 @@ if st.sidebar.button("ログアウト"):
 
 # 権限によって使えるメニューを分ける（F-02）
 if user["role"] == "admin":
-    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス"])
+    menu = st.sidebar.radio("メニュー", ["資産一覧", "資産登録", "CSV一括登録", "資産更新", "割当・返却・廃棄", "申請の承認", "ライセンス"])
 else:
     menu = st.sidebar.radio("メニュー", ["自分の資産", "申請"])
 
@@ -232,6 +273,8 @@ if menu == "資産一覧":
     show_device_list()
 elif menu == "資産登録":
     show_device_register()
+elif menu == "CSV一括登録":
+    show_device_import()
 elif menu == "資産更新":
     show_device_edit()
 elif menu == "割当・返却・廃棄":
