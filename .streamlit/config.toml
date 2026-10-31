@@ -1,0 +1,34 @@
+# 画面の色の設定（北欧風・トーンを抑えた配色）
+# パソコンがダークモードの設定でも、明るい配色で表示する
+
+[theme]
+base = "light"
+backgroundColor = "#F6F4EF"            # 背景：生成りのリネン
+secondaryBackgroundColor = "#EAEFEA"   # 入力欄などの背景：淡いセージ
+textColor = "#2F3B42"                  # 文字：深いスレートグレー
+primaryColor = "#5B8C85"               # ボタン・選択中：くすんだシーグリーン
+linkColor = "#4E7896"
+borderColor = "#D8DDD6"
+dataframeHeaderBackgroundColor = "#E2EAF0"
+baseRadius = "0.6rem"
+
+# お知らせ・成功・注意・エラーの色（原色を避け、彩度を落とした色）
+blueColor = "#6B8FB3"
+blueBackgroundColor = "#E3ECF4"
+blueTextColor = "#3E5F80"
+greenColor = "#6E9C7F"
+greenBackgroundColor = "#E4EFE7"
+greenTextColor = "#3F6B50"
+yellowColor = "#C9A55A"
+yellowBackgroundColor = "#F6EED9"
+yellowTextColor = "#7A5F26"
+redColor = "#C27C74"
+redBackgroundColor = "#F5E3E0"
+redTextColor = "#8A4A43"
+orangeColor = "#D29A6A"
+violetColor = "#9A8DB8"
+grayColor = "#9AA3A6"
+
+[theme.sidebar]
+backgroundColor = "#E6EDE8"            # サイドバー：セージグリーン
+secondaryBackgroundColor = "#F6F4EF"
