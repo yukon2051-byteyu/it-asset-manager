@@ -62,6 +62,20 @@ def list_licenses_of_employee(employee_id, db_path=db.DB_PATH):
     ]
 
 
+def list_device_licenses(device_id, db_path=db.DB_PATH):
+    """PCに割り当てられているライセンス名の一覧（解除済みは含めない）。機器の詳細表示に使う。"""
+    conn = db.get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT l.name FROM license_assignments a JOIN licenses l ON l.id = a.license_id"
+            " WHERE a.device_id = ? AND a.released_on IS NULL ORDER BY l.name",
+            (device_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r["name"] for r in rows]
+
+
 def list_licenses(today=None, db_path=db.DB_PATH):
     """ライセンスの一覧を、割当数・残数・注意点つきで返す（F-33）。"""
     conn = db.get_connection(db_path)

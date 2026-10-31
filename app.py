@@ -1,3 +1,5 @@
+import datetime
+
 import pandas as pd
 import streamlit as st
 
@@ -8,6 +10,7 @@ import db
 import device_import
 import devices
 import employees
+import exports
 import licenses
 
 st.set_page_config(page_title="社内IT資産管理システム", page_icon="💻")
@@ -130,12 +133,31 @@ def show_audit_logs():
     df = pd.DataFrame(rows)
     st.dataframe(df, hide_index=True)
     # 監査で提出できるよう、表示中の履歴をCSVでダウンロードできるようにする（Excelで開けるよう BOM 付き）
-    st.download_button("CSVでダウンロード", df.to_csv(index=False).encode("utf-8-sig"),
-                       file_name="操作履歴.csv", mime="text/csv")
+    st.download_button("CSVでダウンロード", exports.to_csv_bytes(df),
+                       file_name=f"操作履歴_{datetime.date.today()}.csv", mime="text/csv")
+
+
+def show_device_detail(asset_no):
+    """資産の詳細（F-14）：機器1台の情報と、割当・修理などの履歴を表示する。"""
+    device = devices.get_device(asset_no)
+    col1, col2 = st.columns([2, 3])
+    with col1:
+        st.markdown("**機器の情報**")
+        rows = devices.device_detail_rows(device)
+        if device["category"] == "pc":
+            rows.append({"項目": "割当ライセンス", "値": "、".join(licenses.list_device_licenses(device["id"])) or "なし"})
+        st.dataframe(pd.DataFrame(rows), hide_index=True)
+    with col2:
+        st.markdown("**履歴**（新しい順）")
+        logs = audit.list_logs(target_type="device", target_id=device["id"])
+        if logs:
+            st.dataframe(pd.DataFrame(logs).drop(columns=["対象", "対象名"]), hide_index=True)
+        else:
+            st.info("記録された操作はまだありません（操作履歴の機能を入れる前の操作は残っていません）。")
 
 
 def show_device_list():
-    """資産一覧（F-13）：機器を種別・状態で絞り込んで表示する。"""
+    """資産一覧（F-13）：機器を種別・状態で絞り込んで表示する。CSV・Excelで出力し（F-51）、詳細も見られる（F-14）。"""
     col1, col2 = st.columns(2)
     # 選択肢の中身はコード（pc など）のまま持ち、表示だけ日本語にする
     categories = col1.multiselect(
@@ -152,10 +174,27 @@ def show_device_list():
 
     rows = devices.list_devices(categories, statuses, keyword=keyword, department=department)
     st.caption(f"{len(rows)} 件")
-    if rows:
-        st.dataframe(pd.DataFrame(rows), hide_index=True)
-    else:
+    if not rows:
         st.info("条件に合う機器はありません。")
+        return
+    df = pd.DataFrame(rows)
+    st.dataframe(df, hide_index=True)
+
+    # 今の絞り込み結果を、そのままファイルに出力する。ファイル名には、いつ時点の一覧かがわかるよう日付を入れる
+    today = datetime.date.today()
+    col1, col2, _ = st.columns([1, 1, 2])
+    col1.download_button("CSVでダウンロード", exports.to_csv_bytes(df),
+                         file_name=f"資産一覧_{today}.csv", mime="text/csv")
+    col2.download_button("Excelでダウンロード", exports.to_excel_bytes(df, "資産一覧"),
+                         file_name=f"資産一覧_{today}.xlsx",
+                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.subheader("詳細")
+    labels = {r["資産番号"]: f'{r["資産番号"]}　{r["メーカー"]} {r["型番"]}（{r["状態"]}）' for r in rows}
+    asset_no = st.selectbox("詳細を見る機器", list(labels), format_func=labels.get, index=None,
+                            placeholder="一覧から選んでください", key="detail_target")
+    if asset_no:
+        show_device_detail(asset_no)
 
 
 def device_form_fields(category, device=None, key=""):

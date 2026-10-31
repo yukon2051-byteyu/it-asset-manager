@@ -47,8 +47,11 @@ def describe_changes(before, after, labels):
     return "、".join(parts)
 
 
-def list_logs(target_type=None, keyword=None, limit=500, db_path=db.DB_PATH):
-    """操作履歴を新しい順に返す。target_type で対象の種類、keyword で対象名・内容の部分一致に絞り込む。"""
+def list_logs(target_type=None, keyword=None, limit=500, target_id=None, db_path=db.DB_PATH):
+    """操作履歴を新しい順に返す。
+
+    target_type で対象の種類、keyword で対象名・内容の部分一致、target_id で特定の対象（例：機器1台）に絞り込む。
+    """
     sql = (
         "SELECT a.*, e.employee_code, e.name FROM audit_logs a"
         " LEFT JOIN employees e ON e.id = a.actor_id"
@@ -57,6 +60,9 @@ def list_logs(target_type=None, keyword=None, limit=500, db_path=db.DB_PATH):
     if target_type:
         conditions.append("a.target_type = ?")
         params.append(target_type)
+    if target_id is not None:
+        conditions.append("a.target_id = ?")
+        params.append(target_id)
     if keyword:
         keyword = unicodedata.normalize("NFKC", keyword).strip()
     if keyword:

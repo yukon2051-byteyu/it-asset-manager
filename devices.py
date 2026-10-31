@@ -380,3 +380,20 @@ def apply_status_change(conn, asset_no, action, employee_id=None, actor_id=None)
             detail += f"、このPCのライセンス {released} 件を解除"
     audit.record(conn, actor_id, "device", current["id"], asset_no, "status", detail)
     return new_status
+
+def device_detail_rows(device):
+    """機器1台の詳細（F-14）を「項目・値」の行にする。種別に関係ある項目だけを並べる。"""
+    rows = [
+        ("資産番号", device["asset_no"]),
+        ("種別", CATEGORY_LABELS[device["category"]]),
+        ("状態", STATUS_LABELS[device["status"]]),
+        ("利用者", device.get("user_name") or "なし"),
+    ]
+    # 種別ごとの項目（OS・IMEI など）は、型番・シリアル番号のすぐあとに並べる
+    keys = ["maker", "model", "serial_no", *CATEGORY_FIELDS[device["category"]],
+            "location", "purchase_date", "warranty_end", "note"]
+    for key in keys:
+        value = device.get(key)
+        rows.append((FIELD_LABELS[key], "" if value is None else str(value)))
+    rows += [("登録日時", device["created_at"]), ("更新日時", device["updated_at"])]
+    return [{"項目": label, "値": value} for label, value in rows]
