@@ -58,6 +58,7 @@ def list_all_employees(db_path=db.DB_PATH):
             "メールアドレス": r["email"],
             "権限": ROLE_LABELS[r["role"]],
             "在籍": "在籍" if r["is_active"] else "退職",
+            "パスワード": "発行済" if auth.is_issued(r["password_hash"]) else "未発行",
             "利用中の機器": r["devices"],
         }
         for r in rows

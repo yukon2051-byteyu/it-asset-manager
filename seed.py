@@ -66,6 +66,58 @@ ASSIGNMENTS = [
 DEVICE_COLUMNS = ["asset_no", "category", "maker", "model", "serial_no", "status", "location",
                   "os", "screen_size", "imei", "phone_number", "carrier", "contract_end"]
 
+# 追加のサンプル社員（すべて架空）。合計がこの人数になるまで E0006 以降を追加する
+SAMPLE_TOTAL = 100
+SAMPLE_ADMINS = 2  # 追加分のうち、情報システム部の先頭の何人をIT管理者にするか
+DEPARTMENTS = ["営業部", "情報システム部", "経理部", "総務部", "人事部", "開発部", "マーケティング部", "製造部"]
+SURNAMES = ["青木", "石川", "上田", "遠藤", "大野", "加藤", "木村", "小林", "斎藤", "清水",
+            "杉山", "千葉", "竹内", "中村", "西田", "野口", "原田", "藤井", "松本", "森"]
+GIVEN_NAMES = ["葵", "明", "彩", "健", "沙織", "翔", "直樹", "奈々", "陽菜", "浩",
+               "誠", "真由", "美穂", "悠斗", "裕子", "亮", "涼子", "蓮", "和也", "結衣"]
+
+
+def sample_employees():
+    """追加用の架空の社員を、(社員番号, 氏名, 部署, メール, 権限) の一覧で返す。毎回同じ内容になる。"""
+    # 姓と名の組み合わせ（20×20=400通り）から、重ならないよう4つおきに選ぶ
+    names = [f"{SURNAMES[s]} {GIVEN_NAMES[g]}" for g in range(len(GIVEN_NAMES)) for s in range(len(SURNAMES))][::4]
+    result = []
+    admins = 0
+    for i, number in enumerate(range(len(EMPLOYEES) + 1, SAMPLE_TOTAL + 1)):
+        code = f"E{number:04d}"
+        department = DEPARTMENTS[i % len(DEPARTMENTS)]
+        role = "user"
+        if department == "情報システム部" and admins < SAMPLE_ADMINS:
+            role, admins = "admin", admins + 1
+        result.append((code, names[i], department, f"{code.lower()}@example.com", role))
+    return result
+
+
+def add_sample_employees(db_path=db.DB_PATH):
+    """追加のサンプル社員を登録し、登録した人数を返す。
+
+    すでにある社員番号・メールアドレスは飛ばすので、何度実行しても二重登録しない。
+    パスワードは「未発行」にする（必要な人だけ、IT管理者が利用者管理で再発行する）。
+    """
+    db.init_db(db_path)
+    conn = db.get_connection(db_path)
+    try:
+        added = 0
+        with conn:
+            for code, name, department, email, role in sample_employees():
+                exists = conn.execute(
+                    "SELECT 1 FROM employees WHERE employee_code = ? OR email = ?", (code, email)
+                ).fetchone()
+                if exists:
+                    continue
+                conn.execute(
+                    "INSERT INTO employees (employee_code, name, department, email, role, password_hash)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (code, name, department, email, role, auth.UNISSUED_PASSWORD),
+                )
+                added += 1
+        return added
+    finally:
+        conn.close()
 
 
 def seed(db_path=db.DB_PATH):
@@ -126,9 +178,13 @@ def seed(db_path=db.DB_PATH):
 if __name__ == "__main__":
     passwords = seed()
     if passwords is None:
-        print("すでにデータがあるため、何もしませんでした。")
+        print("すでにデータがあるため、基本のサンプルデータは登録しませんでした。")
     else:
         print("サンプルデータを登録しました。")
         print("ログイン用のパスワードです（この画面でしか表示されません。控えておいてください）:")
         for code, name, _, _, role in EMPLOYEES:
             print(f"  {code}  {name}（{'IT管理者' if role == 'admin' else '一般社員'}）  {passwords[code]}")
+
+    added = add_sample_employees()
+    print(f"追加のサンプル社員を {added} 人登録しました（パスワードは未発行。"
+          "ログインさせる場合は、IT管理者が「利用者管理」で再発行してください）。")

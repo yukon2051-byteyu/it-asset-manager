@@ -12,6 +12,14 @@ ITERATIONS = 600_000
 PASSWORD_LENGTH = 12
 PASSWORD_CHARS = string.ascii_letters + string.digits
 
+# 初期パスワードをまだ発行していない社員の印。ハッシュの形式ではないので、どんなパスワードでもログインできない
+UNISSUED_PASSWORD = "未発行"
+
+
+def is_issued(stored):
+    """パスワードが発行済みか（保存値がハッシュの形式か）。"""
+    return stored.startswith("pbkdf2_sha256$")
+
 
 def make_password():
     """推測されにくいランダムなパスワードを作る（secrets は暗号用の乱数を使う）。"""
